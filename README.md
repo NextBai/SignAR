@@ -1,11 +1,12 @@
 ---
 title: Video Processing Production Line
-emoji: 🏭
+emoji: 🏆
 colorFrom: purple
 colorTo: blue
 sdk: docker
 pinned: false
 app_port: 7860
+license: mit
 ---
 
 # 影片處理生產線 🏭
