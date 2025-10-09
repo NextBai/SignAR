@@ -20,11 +20,15 @@ COPY . .
 
 # 創建必要的目錄並設定權限
 RUN mkdir -p /tmp/downloaded_videos && \
-    chown -R app:app /tmp/downloaded_videos && \
-    chmod 755 /tmp
+    touch /tmp/downloaded_videos.json /tmp/processed_count.json && \
+    chown -R app:app /tmp && \
+    chmod -R 755 /tmp
 
 # 切換到非 root 用戶
 USER app
+
+# 確保應用用戶可以寫入 /tmp
+RUN touch /tmp/downloaded_videos.json /tmp/processed_count.json
 
 # 暴露端口
 EXPOSE 7860

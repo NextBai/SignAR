@@ -36,34 +36,50 @@ def init_storage():
     """初始化儲存目錄和已下載影片記錄"""
     global processed_count
     
-    Path(VIDEO_STORAGE_PATH).mkdir(exist_ok=True)
+    try:
+        # 確保目錄存在
+        os.makedirs(VIDEO_STORAGE_PATH, exist_ok=True)
+    except PermissionError:
+        print(f"警告：無法創建目錄 {VIDEO_STORAGE_PATH}，將使用現有目錄")
     
-    if os.path.exists(DOWNLOADED_VIDEOS_FILE):
-        with open(DOWNLOADED_VIDEOS_FILE, 'r') as f:
-            try:
-                data = json.load(f)
-                DOWNLOADED_VIDEOS.update(data)
-            except json.JSONDecodeError:
-                pass
+    try:
+        if os.path.exists(DOWNLOADED_VIDEOS_FILE):
+            with open(DOWNLOADED_VIDEOS_FILE, 'r') as f:
+                try:
+                    data = json.load(f)
+                    DOWNLOADED_VIDEOS.update(data)
+                except json.JSONDecodeError:
+                    pass
+    except (PermissionError, IOError) as e:
+        print(f"警告：無法讀取 {DOWNLOADED_VIDEOS_FILE}: {e}")
     
-    # 載入處理計數
-    if os.path.exists(PROCESSED_COUNT_FILE):
-        with open(PROCESSED_COUNT_FILE, 'r') as f:
-            try:
-                data = json.load(f)
-                processed_count = data.get('count', 0)
-            except json.JSONDecodeError:
-                processed_count = 0
+    try:
+        # 載入處理計數
+        if os.path.exists(PROCESSED_COUNT_FILE):
+            with open(PROCESSED_COUNT_FILE, 'r') as f:
+                try:
+                    data = json.load(f)
+                    processed_count = data.get('count', 0)
+                except json.JSONDecodeError:
+                    processed_count = 0
+    except (PermissionError, IOError) as e:
+        print(f"警告：無法讀取 {PROCESSED_COUNT_FILE}: {e}")
 
 def save_downloaded_videos():
     """儲存已下載影片的記錄"""
-    with open(DOWNLOADED_VIDEOS_FILE, 'w') as f:
-        json.dump(list(DOWNLOADED_VIDEOS), f)
+    try:
+        with open(DOWNLOADED_VIDEOS_FILE, 'w') as f:
+            json.dump(list(DOWNLOADED_VIDEOS), f)
+    except (PermissionError, IOError) as e:
+        print(f"錯誤：無法儲存已下載影片記錄: {e}")
 
 def save_processed_count():
     """儲存處理計數"""
-    with open(PROCESSED_COUNT_FILE, 'w') as f:
-        json.dump({'count': processed_count}, f)
+    try:
+        with open(PROCESSED_COUNT_FILE, 'w') as f:
+            json.dump({'count': processed_count}, f)
+    except (PermissionError, IOError) as e:
+        print(f"錯誤：無法儲存處理計數: {e}")
 
 def allowed_file(filename):
     """檢查檔案副檔名是否允許"""
