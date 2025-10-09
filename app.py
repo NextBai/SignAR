@@ -250,47 +250,63 @@ def webhook():
     global processed_count
     data = request.get_json()
     
+    # 添加詳細日誌
+    print(f"📥 收到 Webhook 請求")
+    print(f"📋 請求資料: {json.dumps(data, indent=2, ensure_ascii=False)}")
+    
     if data.get('object') == 'page':
+        print(f"✅ 確認為 Page 物件")
         for entry in data.get('entry', []):
+            print(f"📨 處理 Entry: {entry.get('id')}")
             for messaging_event in entry.get('messaging', []):
                 sender_id = messaging_event['sender']['id']
+                print(f"👤 發送者 ID: {sender_id}")
                 
                 # 處理影片訊息
                 if messaging_event.get('message', {}).get('attachments'):
                     attachments = messaging_event['message']['attachments']
+                    print(f"📎 找到 {len(attachments)} 個附件")
                     
                     for attachment in attachments:
-                        if attachment.get('type') == 'video':
+                        attachment_type = attachment.get('type')
+                        print(f"📄 附件類型: {attachment_type}")
+                        
+                        if attachment_type == 'video':
                             video_url = attachment.get('payload', {}).get('url')
+                            print(f"🎬 影片 URL: {video_url}")
                             
                             if video_url:
                                 video_hash = get_video_hash(video_url)
                                 is_duplicate = video_hash in DOWNLOADED_VIDEOS
+                                
+                                print(f"🔑 影片哈希: {video_hash}")
+                                print(f"🔄 是否重複: {is_duplicate}")
                                 
                                 # 觸發前端動畫
                                 trigger_frontend_animation(f"messenger_{video_hash[:8]}", is_duplicate)
                                 
                                 # 檢查是否已下載過
                                 if is_duplicate:
-                                    print(f"影片已存在，跳過下載: {video_hash}")
+                                    print(f"⏭️ 影片已存在，跳過下載: {video_hash}")
                                     send_message(sender_id, "Hello World")
                                 else:
                                     # 下載新影片
+                                    print(f"⬇️ 開始下載影片...")
                                     success, file_path = download_video(video_url, video_hash)
                                     
                                     if success:
                                         DOWNLOADED_VIDEOS.add(video_hash)
                                         save_downloaded_videos()
-                                        print(f"成功下載影片: {file_path}")
+                                        print(f"✅ 成功下載影片: {file_path}")
                                         
                                         # 處理完成後刪除影片
                                         try:
                                             os.remove(file_path)
-                                            print(f"已刪除影片: {file_path}")
+                                            print(f"🗑️ 已刪除影片: {file_path}")
                                         except Exception as e:
-                                            print(f"刪除影片失敗: {e}")
+                                            print(f"❌ 刪除影片失敗: {e}")
                                     else:
-                                        print(f"下載影片失敗")
+                                        print(f"❌ 下載影片失敗")
                                     
                                     # 無論下載成功與否，都回傳 Hello World
                                     send_message(sender_id, "Hello World")
@@ -298,11 +314,21 @@ def webhook():
                                 # 更新處理計數
                                 processed_count += 1
                                 save_processed_count()
+                                print(f"📊 處理計數已更新: {processed_count}")
+                        else:
+                            print(f"⚠️ 非影片附件，類型為: {attachment_type}")
                 
                 # 處理一般文字訊息
                 elif messaging_event.get('message', {}).get('text'):
+                    message_text = messaging_event['message']['text']
+                    print(f"💬 收到文字訊息: {message_text}")
                     send_message(sender_id, "Hello World")
+                else:
+                    print(f"⚠️ 未知的訊息類型: {messaging_event}")
+    else:
+        print(f"❌ 不是 Page 物件: {data.get('object')}")
     
+    print(f"✅ Webhook 處理完成\n")
     return 'OK', 200
 
 @app.route('/health', methods=['GET'])
@@ -310,11 +336,63 @@ def health():
     """健康檢查端點"""
     return jsonify({
         "status": "healthy",
-        "downloaded_videos_count": len(DOWNLOADED_VIDEOS)
+        "downloaded_videos_count": len(DOWNLOADED_VIDEOS),
+        "processed_count": processed_count,
+        "data_dir": DATA_DIR,
+        "verify_token_set": VERIFY_TOKEN != "your_verify_token_here",
+        "page_token_set": PAGE_ACCESS_TOKEN != "your_page_access_token_here"
+    }), 200
+
+@app.route('/debug', methods=['GET'])
+def debug():
+    """調試端點 - 顯示系統詳細資訊"""
+    return jsonify({
+        "system_info": {
+            "data_dir": DATA_DIR,
+            "downloaded_videos_file": DOWNLOADED_VIDEOS_FILE,
+            "processed_count_file": PROCESSED_COUNT_FILE,
+            "video_storage_path": VIDEO_STORAGE_PATH,
+        },
+        "statistics": {
+            "processed_count": processed_count,
+            "unique_videos": len(DOWNLOADED_VIDEOS),
+            "downloaded_video_hashes": list(DOWNLOADED_VIDEOS)[:5] if len(DOWNLOADED_VIDEOS) > 0 else []
+        },
+        "configuration": {
+            "verify_token_set": VERIFY_TOKEN != "your_verify_token_here",
+            "page_token_set": PAGE_ACCESS_TOKEN != "your_page_access_token_here",
+            "max_content_length": app.config['MAX_CONTENT_LENGTH'],
+            "allowed_extensions": list(ALLOWED_EXTENSIONS)
+        },
+        "directories": {
+            "data_dir_exists": os.path.exists(DATA_DIR),
+            "video_storage_exists": os.path.exists(VIDEO_STORAGE_PATH),
+            "downloaded_videos_file_exists": os.path.exists(DOWNLOADED_VIDEOS_FILE),
+            "processed_count_file_exists": os.path.exists(PROCESSED_COUNT_FILE)
+        }
     }), 200
 
 if __name__ == '__main__':
+    print("="*60)
+    print("🏭 影片處理生產線系統啟動中...")
+    print("="*60)
+    
     init_storage()
+    
+    print(f"📁 資料目錄: {DATA_DIR}")
+    print(f"📄 已下載影片記錄檔: {DOWNLOADED_VIDEOS_FILE}")
+    print(f"📊 處理計數檔: {PROCESSED_COUNT_FILE}")
+    print(f"💾 影片儲存路徑: {VIDEO_STORAGE_PATH}")
+    print(f"🔢 已處理影片數: {processed_count}")
+    print(f"🎬 已記錄影片數: {len(DOWNLOADED_VIDEOS)}")
+    print(f"🔑 Messenger Verify Token: {'已設定' if VERIFY_TOKEN != 'your_verify_token_here' else '⚠️ 未設定'}")
+    print(f"🔐 Page Access Token: {'已設定' if PAGE_ACCESS_TOKEN != 'your_page_access_token_here' else '⚠️ 未設定'}")
+    
     port = int(os.environ.get('PORT', 7860))
+    print(f"🌐 啟動 WebSocket 服務於 0.0.0.0:{port}")
+    print("="*60)
+    print("✅ 系統就緒，等待請求...")
+    print("="*60 + "\n")
+    
     # 使用 SocketIO 來運行應用
     socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
