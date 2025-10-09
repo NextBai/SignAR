@@ -108,9 +108,13 @@ def download_video(video_url, video_hash):
         
         file_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
         
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+        try:
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        except (PermissionError, IOError) as e:
+            print(f"寫入影片檔案失敗: {e}")
+            return False, None
         
         return True, file_path
     except Exception as e:
@@ -119,6 +123,10 @@ def download_video(video_url, video_hash):
 
 def send_message(recipient_id, message_text):
     """發送訊息給使用者"""
+    if not PAGE_ACCESS_TOKEN or PAGE_ACCESS_TOKEN == "your_page_access_token_here":
+        print(f"錯誤：PAGE_ACCESS_TOKEN 未設定或使用預設值")
+        return False
+    
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     
     payload = {
@@ -131,9 +139,12 @@ def send_message(recipient_id, message_text):
     try:
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
+        print(f"成功發送訊息到 {recipient_id}: {message_text}")
         return True
     except Exception as e:
         print(f"發送訊息失敗: {e}")
+        print(f"回應狀態碼: {response.status_code if 'response' in locals() else 'N/A'}")
+        print(f"回應內容: {response.text if 'response' in locals() else 'N/A'}")
         return False
 
 def send_hello_world_to_messenger():
@@ -266,22 +277,28 @@ def webhook():
     global processed_count
     data = request.get_json()
     
+    print(f"收到 Webhook 資料: {data}")  # 調試日誌
+    
     if data.get('object') == 'page':
         for entry in data.get('entry', []):
             for messaging_event in entry.get('messaging', []):
                 sender_id = messaging_event['sender']['id']
+                print(f"處理訊息事件，發送者: {sender_id}")  # 調試日誌
                 
                 # 處理影片訊息
                 if messaging_event.get('message', {}).get('attachments'):
                     attachments = messaging_event['message']['attachments']
+                    print(f"發現附件: {len(attachments)} 個")  # 調試日誌
                     
                     for attachment in attachments:
                         if attachment.get('type') == 'video':
                             video_url = attachment.get('payload', {}).get('url')
+                            print(f"處理影片 URL: {video_url}")  # 調試日誌
                             
                             if video_url:
                                 video_hash = get_video_hash(video_url)
                                 is_duplicate = video_hash in DOWNLOADED_VIDEOS
+                                print(f"影片哈希: {video_hash}, 是否重複: {is_duplicate}")  # 調試日誌
                                 
                                 # 觸發前端動畫
                                 trigger_frontend_animation(f"messenger_{video_hash[:8]}", is_duplicate)
@@ -305,11 +322,10 @@ def webhook():
                                             print(f"已刪除影片: {file_path}")
                                         except Exception as e:
                                             print(f"刪除影片失敗: {e}")
-                                    else:
-                                        print(f"下載影片失敗")
                                     
                                     # 無論下載成功與否，都回傳 Hello World
-                                    send_message(sender_id, "Hello World")
+                                    send_result = send_message(sender_id, "Hello World")
+                                    print(f"發送訊息結果: {send_result}")  # 調試日誌
                                 
                                 # 更新處理計數
                                 processed_count += 1
@@ -317,7 +333,9 @@ def webhook():
                 
                 # 處理一般文字訊息
                 elif messaging_event.get('message', {}).get('text'):
-                    send_message(sender_id, "Hello World")
+                    print(f"處理文字訊息: {messaging_event['message']['text']}")  # 調試日誌
+                    send_result = send_message(sender_id, "Hello World")
+                    print(f"發送訊息結果: {send_result}")  # 調試日誌
     
     return 'OK', 200
 
@@ -330,7 +348,19 @@ def health():
     }), 200
 
 if __name__ == '__main__':
+    print("初始化影片處理系統...")
+    print(f"資料目錄: {DATA_DIR}")
+    print(f"影片儲存路徑: {VIDEO_STORAGE_PATH}")
+    print(f"已下載影片檔案: {DOWNLOADED_VIDEOS_FILE}")
+    print(f"處理計數檔案: {PROCESSED_COUNT_FILE}")
+    print(f"VERIFY_TOKEN 設定: {'已設定' if VERIFY_TOKEN != 'your_verify_token_here' else '未設定'}")
+    print(f"PAGE_ACCESS_TOKEN 設定: {'已設定' if PAGE_ACCESS_TOKEN != 'your_page_access_token_here' else '未設定'}")
+    
     init_storage()
+    print(f"載入的已下載影片數量: {len(DOWNLOADED_VIDEOS)}")
+    print(f"載入的處理計數: {processed_count}")
+    
     port = int(os.environ.get('PORT', 7860))
+    print(f"啟動伺服器在端口 {port}")
     # 使用 SocketIO 來運行應用
     socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
