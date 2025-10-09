@@ -16,10 +16,13 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 用於存儲已下載影片的哈希值，避免重複下載
 DOWNLOADED_VIDEOS = set()
-DOWNLOADED_VIDEOS_FILE = "downloaded_videos.json"
-VIDEO_STORAGE_PATH = "downloaded_videos"
-PROCESSED_COUNT_FILE = "processed_count.json"
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'webm'}
+
+# 在 Hugging Face Spaces 中使用 /tmp 目錄來儲存可寫入檔案
+DATA_DIR = os.environ.get('DATA_DIR', '/tmp')
+DOWNLOADED_VIDEOS_FILE = os.path.join(DATA_DIR, "downloaded_videos.json")
+PROCESSED_COUNT_FILE = os.path.join(DATA_DIR, "processed_count.json")
+VIDEO_STORAGE_PATH = os.path.join(DATA_DIR, "downloaded_videos")
 
 # 處理計數器
 processed_count = 0
