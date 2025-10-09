@@ -18,8 +18,8 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 DOWNLOADED_VIDEOS = set()
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv', 'webm'}
 
-# 在 Hugging Face Spaces 中使用 /tmp 目錄來儲存可寫入檔案
-DATA_DIR = os.environ.get('DATA_DIR', '/tmp')
+# 使用可寫入的資料目錄（在 Hugging Face Spaces 使用 /app/data）
+DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
 DOWNLOADED_VIDEOS_FILE = os.path.join(DATA_DIR, "downloaded_videos.json")
 PROCESSED_COUNT_FILE = os.path.join(DATA_DIR, "processed_count.json")
 VIDEO_STORAGE_PATH = os.path.join(DATA_DIR, "downloaded_videos")
@@ -36,50 +36,34 @@ def init_storage():
     """初始化儲存目錄和已下載影片記錄"""
     global processed_count
     
-    try:
-        # 確保目錄存在
-        os.makedirs(VIDEO_STORAGE_PATH, exist_ok=True)
-    except PermissionError:
-        print(f"警告：無法創建目錄 {VIDEO_STORAGE_PATH}，將使用現有目錄")
+    Path(VIDEO_STORAGE_PATH).mkdir(exist_ok=True)
     
-    try:
-        if os.path.exists(DOWNLOADED_VIDEOS_FILE):
-            with open(DOWNLOADED_VIDEOS_FILE, 'r') as f:
-                try:
-                    data = json.load(f)
-                    DOWNLOADED_VIDEOS.update(data)
-                except json.JSONDecodeError:
-                    pass
-    except (PermissionError, IOError) as e:
-        print(f"警告：無法讀取 {DOWNLOADED_VIDEOS_FILE}: {e}")
+    if os.path.exists(DOWNLOADED_VIDEOS_FILE):
+        with open(DOWNLOADED_VIDEOS_FILE, 'r') as f:
+            try:
+                data = json.load(f)
+                DOWNLOADED_VIDEOS.update(data)
+            except json.JSONDecodeError:
+                pass
     
-    try:
-        # 載入處理計數
-        if os.path.exists(PROCESSED_COUNT_FILE):
-            with open(PROCESSED_COUNT_FILE, 'r') as f:
-                try:
-                    data = json.load(f)
-                    processed_count = data.get('count', 0)
-                except json.JSONDecodeError:
-                    processed_count = 0
-    except (PermissionError, IOError) as e:
-        print(f"警告：無法讀取 {PROCESSED_COUNT_FILE}: {e}")
+    # 載入處理計數
+    if os.path.exists(PROCESSED_COUNT_FILE):
+        with open(PROCESSED_COUNT_FILE, 'r') as f:
+            try:
+                data = json.load(f)
+                processed_count = data.get('count', 0)
+            except json.JSONDecodeError:
+                processed_count = 0
 
 def save_downloaded_videos():
     """儲存已下載影片的記錄"""
-    try:
-        with open(DOWNLOADED_VIDEOS_FILE, 'w') as f:
-            json.dump(list(DOWNLOADED_VIDEOS), f)
-    except (PermissionError, IOError) as e:
-        print(f"錯誤：無法儲存已下載影片記錄: {e}")
+    with open(DOWNLOADED_VIDEOS_FILE, 'w') as f:
+        json.dump(list(DOWNLOADED_VIDEOS), f)
 
 def save_processed_count():
     """儲存處理計數"""
-    try:
-        with open(PROCESSED_COUNT_FILE, 'w') as f:
-            json.dump({'count': processed_count}, f)
-    except (PermissionError, IOError) as e:
-        print(f"錯誤：無法儲存處理計數: {e}")
+    with open(PROCESSED_COUNT_FILE, 'w') as f:
+        json.dump({'count': processed_count}, f)
 
 def allowed_file(filename):
     """檢查檔案副檔名是否允許"""
@@ -108,13 +92,9 @@ def download_video(video_url, video_hash):
         
         file_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
         
-        try:
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        except (PermissionError, IOError) as e:
-            print(f"寫入影片檔案失敗: {e}")
-            return False, None
+        with open(file_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
         
         return True, file_path
     except Exception as e:
@@ -123,10 +103,6 @@ def download_video(video_url, video_hash):
 
 def send_message(recipient_id, message_text):
     """發送訊息給使用者"""
-    if not PAGE_ACCESS_TOKEN or PAGE_ACCESS_TOKEN == "your_page_access_token_here":
-        print(f"錯誤：PAGE_ACCESS_TOKEN 未設定或使用預設值")
-        return False
-    
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     
     payload = {
@@ -139,12 +115,9 @@ def send_message(recipient_id, message_text):
     try:
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
-        print(f"成功發送訊息到 {recipient_id}: {message_text}")
         return True
     except Exception as e:
         print(f"發送訊息失敗: {e}")
-        print(f"回應狀態碼: {response.status_code if 'response' in locals() else 'N/A'}")
-        print(f"回應內容: {response.text if 'response' in locals() else 'N/A'}")
         return False
 
 def send_hello_world_to_messenger():
@@ -277,28 +250,22 @@ def webhook():
     global processed_count
     data = request.get_json()
     
-    print(f"收到 Webhook 資料: {data}")  # 調試日誌
-    
     if data.get('object') == 'page':
         for entry in data.get('entry', []):
             for messaging_event in entry.get('messaging', []):
                 sender_id = messaging_event['sender']['id']
-                print(f"處理訊息事件，發送者: {sender_id}")  # 調試日誌
                 
                 # 處理影片訊息
                 if messaging_event.get('message', {}).get('attachments'):
                     attachments = messaging_event['message']['attachments']
-                    print(f"發現附件: {len(attachments)} 個")  # 調試日誌
                     
                     for attachment in attachments:
                         if attachment.get('type') == 'video':
                             video_url = attachment.get('payload', {}).get('url')
-                            print(f"處理影片 URL: {video_url}")  # 調試日誌
                             
                             if video_url:
                                 video_hash = get_video_hash(video_url)
                                 is_duplicate = video_hash in DOWNLOADED_VIDEOS
-                                print(f"影片哈希: {video_hash}, 是否重複: {is_duplicate}")  # 調試日誌
                                 
                                 # 觸發前端動畫
                                 trigger_frontend_animation(f"messenger_{video_hash[:8]}", is_duplicate)
@@ -322,10 +289,11 @@ def webhook():
                                             print(f"已刪除影片: {file_path}")
                                         except Exception as e:
                                             print(f"刪除影片失敗: {e}")
+                                    else:
+                                        print(f"下載影片失敗")
                                     
                                     # 無論下載成功與否，都回傳 Hello World
-                                    send_result = send_message(sender_id, "Hello World")
-                                    print(f"發送訊息結果: {send_result}")  # 調試日誌
+                                    send_message(sender_id, "Hello World")
                                 
                                 # 更新處理計數
                                 processed_count += 1
@@ -333,9 +301,7 @@ def webhook():
                 
                 # 處理一般文字訊息
                 elif messaging_event.get('message', {}).get('text'):
-                    print(f"處理文字訊息: {messaging_event['message']['text']}")  # 調試日誌
-                    send_result = send_message(sender_id, "Hello World")
-                    print(f"發送訊息結果: {send_result}")  # 調試日誌
+                    send_message(sender_id, "Hello World")
     
     return 'OK', 200
 
@@ -348,19 +314,7 @@ def health():
     }), 200
 
 if __name__ == '__main__':
-    print("初始化影片處理系統...")
-    print(f"資料目錄: {DATA_DIR}")
-    print(f"影片儲存路徑: {VIDEO_STORAGE_PATH}")
-    print(f"已下載影片檔案: {DOWNLOADED_VIDEOS_FILE}")
-    print(f"處理計數檔案: {PROCESSED_COUNT_FILE}")
-    print(f"VERIFY_TOKEN 設定: {'已設定' if VERIFY_TOKEN != 'your_verify_token_here' else '未設定'}")
-    print(f"PAGE_ACCESS_TOKEN 設定: {'已設定' if PAGE_ACCESS_TOKEN != 'your_page_access_token_here' else '未設定'}")
-    
     init_storage()
-    print(f"載入的已下載影片數量: {len(DOWNLOADED_VIDEOS)}")
-    print(f"載入的處理計數: {processed_count}")
-    
     port = int(os.environ.get('PORT', 7860))
-    print(f"啟動伺服器在端口 {port}")
     # 使用 SocketIO 來運行應用
     socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
