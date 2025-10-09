@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>影片處理生產線 🏭</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .production-line {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 1000px;
+            width: 100%;
+        }
+
+        .assembly-line {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: relative;
+            min-height: 300px;
+        }
+
+        /* 進料口 */
+        .input-zone {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background: #f0f4ff;
+            border-radius: 15px;
+            border: 3px dashed #667eea;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .input-zone:hover {
+            background: #e8edff;
+            border-color: #5568d3;
+            transform: scale(1.02);
+        }
+
+        .input-zone.dragover {
+            background: #d4e0ff;
+            border-color: #4557c2;
+        }
+
+        .input-icon {
+            font-size: 4em;
+            margin-bottom: 10px;
+        }
+
+        .input-zone h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .input-zone p {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        /* 傳送帶 */
+        .conveyor-belt {
+            flex: 2;
+            position: relative;
+            height: 100px;
+            margin: 0 30px;
+        }
+
+        .belt {
+            width: 100%;
+            height: 60px;
+            background: linear-gradient(to right, #444 0%, #555 50%, #444 100%);
+            border-radius: 10px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: inset 0 5px 15px rgba(0,0,0,0.5);
+        }
+
+        .belt-stripes {
+            position: absolute;
+            width: 200%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                90deg,
+                transparent,
+                transparent 40px,
+                rgba(255,255,255,0.1) 40px,
+                rgba(255,255,255,0.1) 60px
+            );
+            animation: belt-move 2s linear infinite;
+            animation-play-state: paused;
+        }
+
+        .belt-stripes.moving {
+            animation-play-state: running;
+        }
+
+        @keyframes belt-move {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-60px); }
+        }
+
+        /* 影片在傳送帶上 */
+        .video-package {
+            position: absolute;
+            top: 10px;
+            left: -100px;
+            width: 80px;
+            height: 60px;
+            background: #ff6b6b;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2em;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .video-package.moving {
+            animation: package-move 4s linear forwards;
+            opacity: 1;
+        }
+
+        @keyframes package-move {
+            0% { left: -100px; }
+            100% { left: calc(100% + 20px); }
+        }
+
+        /* 輸出區 */
+        .output-zone {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background: #f0fff4;
+            border-radius: 15px;
+            border: 3px solid #48bb78;
+            position: relative;
+        }
+
+        .output-icon {
+            font-size: 4em;
+            margin-bottom: 10px;
+        }
+
+        .output-zone h3 {
+            color: #48bb78;
+            margin-bottom: 10px;
+        }
+
+        .output-message {
+            display: none;
+            background: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #48bb78;
+            animation: pop 0.5s ease-out;
+        }
+
+        .output-message.show {
+            display: block;
+        }
+
+        @keyframes pop {
+            0% { transform: scale(0); opacity: 0; }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* 叮的特效 */
+        .ding-effect {
+            position: absolute;
+            top: -50px;
+            right: 20px;
+            font-size: 3em;
+            opacity: 0;
+            animation: ding 0.8s ease-out;
+        }
+
+        @keyframes ding {
+            0% { opacity: 0; transform: scale(0) rotate(-45deg); }
+            50% { opacity: 1; transform: scale(1.2) rotate(5deg); }
+            100% { opacity: 0; transform: scale(1) rotate(0deg); }
+        }
+
+        /* 狀態顯示 */
+        .status-panel {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f7fafc;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .status-item:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            font-weight: bold;
+            color: #4a5568;
+        }
+
+        .status-value {
+            color: #667eea;
+        }
+
+        /* 按鈕 */
+        .upload-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 15px;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .upload-btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+        }
+
+        .upload-btn:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* 載入動畫 */
+        .spinner {
+            display: none;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        .spinner.show {
+            display: block;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 通知訊息 */
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            display: none;
+            max-width: 300px;
+            z-index: 1000;
+        }
+
+        .notification.show {
+            display: block;
+            animation: slideIn 0.5s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(400px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        .notification.success {
+            border-left: 4px solid #48bb78;
+        }
+
+        .notification.error {
+            border-left: 4px solid #f56565;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🏭 影片處理生產線</h1>
+        <p>上傳影片 → 處理中 → 叮！完成！</p>
+    </div>
+
+    <div class="production-line">
+        <div class="assembly-line">
+            <!-- 進料口 -->
+            <div class="input-zone" id="inputZone">
+                <div class="input-icon">📥</div>
+                <h3>進料口</h3>
+                <p>點擊或拖曳影片到這裡</p>
+                <input type="file" id="fileInput" accept="video/*">
+                <button class="upload-btn" id="uploadBtn" style="display: none;">開始處理</button>
+            </div>
+
+            <!-- 傳送帶 -->
+            <div class="conveyor-belt">
+                <div class="belt">
+                    <div class="belt-stripes" id="beltStripes"></div>
+                    <div class="video-package" id="videoPackage">🎬</div>
+                </div>
+            </div>
+
+            <!-- 輸出區 -->
+            <div class="output-zone" id="outputZone">
+                <div class="output-icon">📤</div>
+                <h3>輸出區</h3>
+                <p>處理完成後顯示</p>
+                <div class="output-message" id="outputMessage">
+                    Hello World! ✨
+                </div>
+            </div>
+        </div>
+
+        <div class="spinner" id="spinner"></div>
+
+        <!-- 狀態面板 -->
+        <div class="status-panel">
+            <div class="status-item">
+                <span class="status-label">📊 當前狀態：</span>
+                <span class="status-value" id="statusText">等待上傳</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">📁 已選檔案：</span>
+                <span class="status-value" id="fileName">無</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">📦 已處理影片數：</span>
+                <span class="status-value" id="processedCount">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通知訊息 -->
+    <div class="notification" id="notification">
+        <div id="notificationText"></div>
+    </div>
+
+    <script>
+        const inputZone = document.getElementById('inputZone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const beltStripes = document.getElementById('beltStripes');
+        const videoPackage = document.getElementById('videoPackage');
+        const outputMessage = document.getElementById('outputMessage');
+        const outputZone = document.getElementById('outputZone');
+        const spinner = document.getElementById('spinner');
+        const statusText = document.getElementById('statusText');
+        const fileName = document.getElementById('fileName');
+        const processedCount = document.getElementById('processedCount');
+        const notification = document.getElementById('notification');
+        const notificationText = document.getElementById('notificationText');
+
+        let selectedFile = null;
+        let totalProcessed = 0;
+
+        // 點擊進料口選擇檔案
+        inputZone.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // 檔案選擇
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file && file.type.startsWith('video/')) {
+                selectedFile = file;
+                fileName.textContent = file.name;
+                statusText.textContent = '已選擇影片，準備處理';
+                uploadBtn.style.display = 'block';
+                showNotification('已選擇影片：' + file.name, 'success');
+            } else {
+                showNotification('請選擇有效的影片檔案', 'error');
+            }
+        });
+
+        // 拖放功能
+        inputZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            inputZone.classList.add('dragover');
+        });
+
+        inputZone.addEventListener('dragleave', () => {
+            inputZone.classList.remove('dragover');
+        });
+
+        inputZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            inputZone.classList.remove('dragover');
+            
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('video/')) {
+                selectedFile = file;
+                fileName.textContent = file.name;
+                statusText.textContent = '已選擇影片，準備處理';
+                uploadBtn.style.display = 'block';
+                showNotification('已選擇影片：' + file.name, 'success');
+            } else {
+                showNotification('請選擇有效的影片檔案', 'error');
+            }
+        });
+
+        // 上傳按鈕
+        uploadBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!selectedFile) return;
+
+            // 開始生產線動畫
+            startProductionLine();
+        });
+
+        async function startProductionLine() {
+            uploadBtn.disabled = true;
+            statusText.textContent = '處理中...';
+            
+            // 啟動傳送帶
+            beltStripes.classList.add('moving');
+            videoPackage.classList.add('moving');
+
+            // 等待傳送帶動畫完成（4秒）
+            await sleep(3500);
+
+            // 上傳影片
+            const formData = new FormData();
+            formData.append('video', selectedFile);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // 叮！顯示特效
+                    showDingEffect();
+                    
+                    // 顯示 Hello World
+                    await sleep(300);
+                    outputMessage.classList.add('show');
+                    statusText.textContent = '處理完成！';
+                    totalProcessed++;
+                    processedCount.textContent = totalProcessed;
+
+                    showNotification(result.message, 'success');
+
+                    // 3秒後重置
+                    await sleep(3000);
+                    resetProductionLine();
+                } else {
+                    showNotification('處理失敗：' + result.message, 'error');
+                    resetProductionLine();
+                }
+            } catch (error) {
+                showNotification('上傳失敗：' + error.message, 'error');
+                resetProductionLine();
+            }
+        }
+
+        function showDingEffect() {
+            const ding = document.createElement('div');
+            ding.className = 'ding-effect';
+            ding.textContent = '🔔';
+            outputZone.appendChild(ding);
+            
+            // 播放叮的音效（如果有的話）
+            setTimeout(() => {
+                ding.remove();
+            }, 800);
+        }
+
+        function resetProductionLine() {
+            beltStripes.classList.remove('moving');
+            videoPackage.classList.remove('moving');
+            outputMessage.classList.remove('show');
+            uploadBtn.disabled = false;
+            uploadBtn.style.display = 'none';
+            selectedFile = null;
+            fileInput.value = '';
+            fileName.textContent = '無';
+            statusText.textContent = '等待上傳';
+            
+            // 重置動畫
+            setTimeout(() => {
+                videoPackage.style.animation = 'none';
+                setTimeout(() => {
+                    videoPackage.style.animation = '';
+                }, 10);
+            }, 100);
+        }
+
+        function showNotification(message, type = 'success') {
+            notificationText.textContent = message;
+            notification.className = 'notification show ' + type;
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 4000);
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // 初始載入處理數量
+        fetch('/stats')
+            .then(res => res.json())
+            .then(data => {
+                if (data.processed_count !== undefined) {
+                    totalProcessed = data.processed_count;
+                    processedCount.textContent = totalProcessed;
+                }
+            })
+            .catch(err => console.error('載入統計失敗:', err));
+
+        // ===== WebSocket 連接（接收 Messenger Bot 的觸發）=====
+        const socket = io();
+
+        socket.on('connect', () => {
+            console.log('✅ WebSocket 已連接');
+        });
+
+        socket.on('messenger_upload', async (data) => {
+            console.log('📨 收到 Messenger 上傳事件:', data);
+            
+            if (data.status === 'start') {
+                // 開始動畫
+                statusText.textContent = `Messenger Bot 處理中: ${data.video_name}`;
+                fileName.textContent = data.video_name;
+                
+                // 啟動傳送帶和影片動畫
+                beltStripes.classList.add('moving');
+                videoPackage.classList.add('moving');
+                
+                showNotification(`📱 Messenger Bot 上傳影片: ${data.video_name}`, 'success');
+                
+            } else if (data.status === 'complete') {
+                // 完成動畫
+                showDingEffect();
+                
+                await sleep(300);
+                outputMessage.textContent = data.message;
+                outputMessage.classList.add('show');
+                statusText.textContent = '處理完成！(Messenger Bot)';
+                
+                totalProcessed++;
+                processedCount.textContent = totalProcessed;
+                
+                showNotification(data.message, 'success');
+                
+                // 3秒後重置
+                await sleep(3000);
+                resetProductionLine();
+            }
+        });
+
+        socket.on('disconnect', () => {
+            console.log('❌ WebSocket 已斷線');
+        });
+    </script>
+</body>
+</html>
