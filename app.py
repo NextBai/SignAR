@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import hashlib
 import requests
@@ -8,6 +9,15 @@ from pathlib import Path
 from werkzeug.utils import secure_filename
 import time
 import threading
+
+# 強制標準輸出和錯誤輸出無緩衝，確保日誌即時顯示
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+# 立即輸出測試訊息
+print("=" * 80, flush=True)
+print("🚀 Python 應用程式開始載入...", flush=True)
+print("=" * 80, flush=True)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'video-processing-secret-key')

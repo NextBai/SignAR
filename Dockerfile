@@ -21,9 +21,11 @@ RUN mkdir -p /app/data && \
 
 # 設定環境變數指向可寫入的目錄
 ENV DATA_DIR=/app/data
+# 強制 Python 無緩衝輸出，確保日誌即時顯示
+ENV PYTHONUNBUFFERED=1
 
 # 暴露端口
 EXPOSE 7860
 
-# 啟動應用
-CMD ["python", "app.py"]
+# 啟動應用（使用 -u 參數確保無緩衝輸出）
+CMD ["python", "-u", "app.py"]
