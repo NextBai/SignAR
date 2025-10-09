@@ -113,6 +113,12 @@ def download_video(video_url, video_hash):
 
 def send_message(recipient_id, message_text):
     """發送訊息給使用者"""
+    # 檢查是否在 Hugging Face Spaces 環境
+    if os.environ.get('SPACE_ID'):
+        print(f"⚠️ 在 Hugging Face Spaces 環境中，無法發送 Messenger 訊息（DNS 限制）")
+        print(f"💬 應發送的訊息: {message_text} (給用戶 {recipient_id})")
+        return True
+    
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     
     payload = {
@@ -125,9 +131,10 @@ def send_message(recipient_id, message_text):
     try:
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
+        print(f"✅ 成功發送訊息給 {recipient_id}")
         return True
     except Exception as e:
-        print(f"發送訊息失敗: {e}")
+        print(f"❌ 發送訊息失敗: {e}")
         return False
 
 def send_hello_world_to_messenger():

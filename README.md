@@ -58,6 +58,28 @@ license: mit
 3. 設定 Verify Token 為您的 `MESSENGER_VERIFY_TOKEN`
 4. 訂閱 `messages` 事件
 
+## 重要限制 ⚠️
+
+### Hugging Face Spaces 網路限制
+
+由於 Hugging Face Spaces 的安全政策，**無法直接訪問某些外部域名**，包括：
+- ❌ `graph.facebook.com` - Facebook Graph API
+- ❌ Meta/Facebook 相關服務
+
+### 影響
+
+- ✅ **前端網頁上傳**：完全正常運作
+- ✅ **影片處理**：下載、檢測重複、刪除都正常
+- ✅ **動畫展示**：WebSocket 即時同步正常
+- ✅ **Messenger Webhook 接收**：可以接收影片
+- ❌ **Messenger 訊息回覆**：無法發送（DNS 解析失敗）
+
+### 解決方案
+
+如需完整的 Messenger Bot 功能（包含訊息回覆），建議：
+1. 使用其他平台部署（Railway, Render, Vercel, AWS, GCP）
+2. 或將此 Space 作為前端展示，後端 API 部署在其他平台
+
 ## 支援的影片格式
 
 MP4, AVI, MOV, MKV, FLV, WMV, WebM
