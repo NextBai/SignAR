@@ -23,9 +23,11 @@ RUN mkdir -p /app/data && \
 ENV DATA_DIR=/app/data
 # 強制 Python 無緩衝輸出，確保日誌即時顯示
 ENV PYTHONUNBUFFERED=1
+# Render 會動態設定 PORT，預設 10000
+ENV PORT=10000
 
-# 暴露端口
-EXPOSE 7860
+# 暴露端口（Render 會自動映射）
+EXPOSE 10000
 
 # 啟動應用（使用 -u 參數確保無緩衝輸出）
 CMD ["python", "-u", "app.py"]
