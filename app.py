@@ -141,28 +141,29 @@ def send_hello_world_to_messenger():
 def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is_duplicate=False):
     """觸發前端動畫（用於 Messenger Bot 上傳）"""
     def run_animation():
-        # 發送開始處理事件（broadcast=True 確保所有客戶端都能收到）
-        socketio.emit('messenger_upload', {
-            'status': 'start',
-            'video_name': video_name
-        }, broadcast=True)
+        with app.app_context():
+            # 發送開始處理事件
+            socketio.emit('messenger_upload', {
+                'status': 'start',
+                'video_name': video_name
+            }, namespace='/')
 
-        print(f"🔔 已發送開始動畫事件: {video_name}")
+            print(f"🔔 已發送開始動畫事件: {video_name}")
 
-        # 等待動畫完成（4秒）
-        time.sleep(3.5)
+            # 等待動畫完成（4秒）
+            time.sleep(3.5)
 
-        # 發送完成事件
-        message = "此影片已處理過！Hello World（重複影片）" if is_duplicate else "Hello World! 影片處理完成"
-        socketio.emit('messenger_upload', {
-            'status': 'complete',
-            'message': message,
-            'video_url': f'/videos/{video_hash}' if video_hash else None,
-            'video_hash': video_hash,
-            'timestamp': time.time()
-        }, broadcast=True)
+            # 發送完成事件
+            message = "此影片已處理過！Hello World（重複影片）" if is_duplicate else "Hello World! 影片處理完成"
+            socketio.emit('messenger_upload', {
+                'status': 'complete',
+                'message': message,
+                'video_url': f'/videos/{video_hash}' if video_hash else None,
+                'video_hash': video_hash,
+                'timestamp': time.time()
+            }, namespace='/')
 
-        print(f"🔔 已發送完成動畫事件: {message}")
+            print(f"🔔 已發送完成動畫事件: {message}")
 
     # 在背景執行緒中執行動畫
     thread = threading.Thread(target=run_animation)
