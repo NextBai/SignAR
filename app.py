@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import sys
 import json
@@ -22,7 +25,7 @@ print("=" * 80, flush=True)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'video-processing-secret-key')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB 上傳限制
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
 # 用於存儲已下載影片的哈希值，避免重複下載
 DOWNLOADED_VIDEOS = set()
@@ -395,9 +398,10 @@ if __name__ == '__main__':
     
     port = int(os.environ.get('PORT', 7860))
     print(f"🌐 啟動 WebSocket 服務於 0.0.0.0:{port}")
+    print(f"🔧 使用 async_mode: eventlet")
     print("="*60)
     print("✅ 系統就緒，等待請求...")
     print("="*60 + "\n")
-    
-    # 使用 SocketIO 來運行應用
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+
+    # 使用 SocketIO 來運行應用（eventlet 模式）
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)

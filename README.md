@@ -49,7 +49,8 @@
 - **Name**: `video-processing-line`（自訂）
 - **Environment**: `Python 3`
 - **Build Command**: `pip install -r requirements.txt`
-- **Start Command**: `python app.py`
+- **Start Command**: `gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app`
+  - 或使用腳本：`bash render_start.sh`
 
 ### 3. 設定環境變數
 在 Render Dashboard > Environment 中新增：
