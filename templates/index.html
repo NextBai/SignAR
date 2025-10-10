@@ -472,10 +472,20 @@
             .catch(err => console.error('載入統計失敗:', err));
 
         // ===== WebSocket 連接（接收 Messenger Bot 的觸發）=====
-        const socket = io();
+        const socket = io({
+            transports: ['websocket', 'polling'],
+            upgrade: true,
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000
+        });
 
         socket.on('connect', () => {
-            console.log('✅ WebSocket 已連接');
+            console.log('✅ WebSocket 已連接，Socket ID:', socket.id);
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('❌ WebSocket 連線失敗:', error);
         });
 
         socket.on('messenger_upload', async (data) => {

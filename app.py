@@ -357,6 +357,26 @@ def debug():
         }
     }), 200
 
+@app.route('/test-websocket', methods=['GET'])
+def test_websocket():
+    """測試 WebSocket 廣播"""
+    socketio.emit('messenger_upload', {
+        'status': 'start',
+        'video_name': 'test_video'
+    }, namespace='/')
+
+    time.sleep(1)
+
+    socketio.emit('messenger_upload', {
+        'status': 'complete',
+        'message': 'WebSocket 測試成功！',
+        'video_url': None,
+        'video_hash': 'test123',
+        'timestamp': time.time()
+    }, namespace='/')
+
+    return jsonify({'message': 'WebSocket 事件已發送，檢查前端 Console'}), 200
+
 if __name__ == '__main__':
     print("="*60)
     print("🏭 影片處理生產線系統啟動中...")
