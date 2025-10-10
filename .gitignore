@@ -52,3 +52,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Claude Code
+.claude/

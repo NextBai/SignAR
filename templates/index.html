@@ -51,8 +51,8 @@
             min-height: 300px;
         }
 
-        /* 進料口 */
-        .input-zone {
+        /* 影片展示區 */
+        .video-display-zone {
             flex: 1;
             display: flex;
             flex-direction: column;
@@ -60,40 +60,24 @@
             padding: 20px;
             background: #f0f4ff;
             border-radius: 15px;
-            border: 3px dashed #667eea;
-            cursor: pointer;
+            border: 3px solid #667eea;
             transition: all 0.3s;
             position: relative;
         }
 
-        .input-zone:hover {
-            background: #e8edff;
-            border-color: #5568d3;
-            transform: scale(1.02);
-        }
-
-        .input-zone.dragover {
-            background: #d4e0ff;
-            border-color: #4557c2;
-        }
-
-        .input-icon {
+        .video-icon {
             font-size: 4em;
             margin-bottom: 10px;
         }
 
-        .input-zone h3 {
+        .video-display-zone h3 {
             color: #667eea;
             margin-bottom: 10px;
         }
 
-        .input-zone p {
+        .video-display-zone p {
             color: #666;
             font-size: 0.9em;
-        }
-
-        input[type="file"] {
-            display: none;
         }
 
         /* 傳送帶 */
@@ -339,18 +323,24 @@
 <body>
     <div class="header">
         <h1>🏭 影片處理生產線</h1>
-        <p>上傳影片 → 處理中 → 叮！完成！</p>
+        <p>Messenger Bot 影片展示平台</p>
     </div>
 
     <div class="production-line">
         <div class="assembly-line">
-            <!-- 進料口 -->
-            <div class="input-zone" id="inputZone">
-                <div class="input-icon">📥</div>
-                <h3>進料口</h3>
-                <p>點擊或拖曳影片到這裡</p>
-                <input type="file" id="fileInput" accept="video/*">
-                <button class="upload-btn" id="uploadBtn" style="display: none;">開始處理</button>
+            <!-- 影片展示區 -->
+            <div class="video-display-zone" id="videoDisplayZone">
+                <div class="video-icon">🎬</div>
+                <h3>影片播放區</h3>
+                <video id="mainVideo" controls style="display: none; width: 100%; max-width: 400px; border-radius: 10px; margin-top: 10px;">
+                    <source src="" type="video/mp4">
+                    您的瀏覽器不支援影片播放
+                </video>
+                <div class="video-info" id="videoInfo" style="display: none; margin-top: 10px; font-size: 0.9em; color: #666;">
+                    <p>📱 來源：Messenger Bot</p>
+                    <p>⏰ 時間：<span id="videoTime">--</span></p>
+                </div>
+                <p id="waitingText" style="color: #999; font-size: 0.9em;">等待 Messenger Bot 傳送影片...</p>
             </div>
 
             <!-- 傳送帶 -->
@@ -378,14 +368,14 @@
         <div class="status-panel">
             <div class="status-item">
                 <span class="status-label">📊 當前狀態：</span>
-                <span class="status-value" id="statusText">等待上傳</span>
+                <span class="status-value" id="statusText">等待 Messenger Bot 傳送影片</span>
             </div>
             <div class="status-item">
-                <span class="status-label">📁 已選檔案：</span>
-                <span class="status-value" id="fileName">無</span>
+                <span class="status-label">🎬 目前影片：</span>
+                <span class="status-value" id="currentVideo">無</span>
             </div>
             <div class="status-item">
-                <span class="status-label">📦 已處理影片數：</span>
+                <span class="status-label">📦 已收到影片數：</span>
                 <span class="status-value" id="processedCount">0</span>
             </div>
         </div>
@@ -397,125 +387,22 @@
     </div>
 
     <script>
-        const inputZone = document.getElementById('inputZone');
-        const fileInput = document.getElementById('fileInput');
-        const uploadBtn = document.getElementById('uploadBtn');
         const beltStripes = document.getElementById('beltStripes');
         const videoPackage = document.getElementById('videoPackage');
         const outputMessage = document.getElementById('outputMessage');
         const outputZone = document.getElementById('outputZone');
         const spinner = document.getElementById('spinner');
         const statusText = document.getElementById('statusText');
-        const fileName = document.getElementById('fileName');
+        const currentVideo = document.getElementById('currentVideo');
         const processedCount = document.getElementById('processedCount');
         const notification = document.getElementById('notification');
         const notificationText = document.getElementById('notificationText');
+        const mainVideo = document.getElementById('mainVideo');
+        const videoInfo = document.getElementById('videoInfo');
+        const videoTime = document.getElementById('videoTime');
+        const waitingText = document.getElementById('waitingText');
 
-        let selectedFile = null;
         let totalProcessed = 0;
-
-        // 點擊進料口選擇檔案
-        inputZone.addEventListener('click', () => {
-            fileInput.click();
-        });
-
-        // 檔案選擇
-        fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file && file.type.startsWith('video/')) {
-                selectedFile = file;
-                fileName.textContent = file.name;
-                statusText.textContent = '已選擇影片，準備處理';
-                uploadBtn.style.display = 'block';
-                showNotification('已選擇影片：' + file.name, 'success');
-            } else {
-                showNotification('請選擇有效的影片檔案', 'error');
-            }
-        });
-
-        // 拖放功能
-        inputZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            inputZone.classList.add('dragover');
-        });
-
-        inputZone.addEventListener('dragleave', () => {
-            inputZone.classList.remove('dragover');
-        });
-
-        inputZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            inputZone.classList.remove('dragover');
-            
-            const file = e.dataTransfer.files[0];
-            if (file && file.type.startsWith('video/')) {
-                selectedFile = file;
-                fileName.textContent = file.name;
-                statusText.textContent = '已選擇影片，準備處理';
-                uploadBtn.style.display = 'block';
-                showNotification('已選擇影片：' + file.name, 'success');
-            } else {
-                showNotification('請選擇有效的影片檔案', 'error');
-            }
-        });
-
-        // 上傳按鈕
-        uploadBtn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (!selectedFile) return;
-
-            // 開始生產線動畫
-            startProductionLine();
-        });
-
-        async function startProductionLine() {
-            uploadBtn.disabled = true;
-            statusText.textContent = '處理中...';
-            
-            // 啟動傳送帶
-            beltStripes.classList.add('moving');
-            videoPackage.classList.add('moving');
-
-            // 等待傳送帶動畫完成（4秒）
-            await sleep(3500);
-
-            // 上傳影片
-            const formData = new FormData();
-            formData.append('video', selectedFile);
-
-            try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    // 叮！顯示特效
-                    showDingEffect();
-                    
-                    // 顯示 Hello World
-                    await sleep(300);
-                    outputMessage.classList.add('show');
-                    statusText.textContent = '處理完成！';
-                    totalProcessed++;
-                    processedCount.textContent = totalProcessed;
-
-                    showNotification(result.message, 'success');
-
-                    // 3秒後重置
-                    await sleep(3000);
-                    resetProductionLine();
-                } else {
-                    showNotification('處理失敗：' + result.message, 'error');
-                    resetProductionLine();
-                }
-            } catch (error) {
-                showNotification('上傳失敗：' + error.message, 'error');
-                resetProductionLine();
-            }
-        }
 
         function showDingEffect() {
             const ding = document.createElement('div');
@@ -533,13 +420,8 @@
             beltStripes.classList.remove('moving');
             videoPackage.classList.remove('moving');
             outputMessage.classList.remove('show');
-            uploadBtn.disabled = false;
-            uploadBtn.style.display = 'none';
-            selectedFile = null;
-            fileInput.value = '';
-            fileName.textContent = '無';
-            statusText.textContent = '等待上傳';
-            
+            statusText.textContent = '等待 Messenger Bot 傳送影片';
+
             // 重置動畫
             setTimeout(() => {
                 videoPackage.style.animation = 'none';
@@ -547,6 +429,22 @@
                     videoPackage.style.animation = '';
                 }, 10);
             }, 100);
+        }
+
+        function loadVideo(videoUrl, videoHash, timestamp) {
+            // 載入影片
+            mainVideo.src = videoUrl;
+            mainVideo.style.display = 'block';
+            waitingText.style.display = 'none';
+
+            // 顯示影片資訊
+            videoInfo.style.display = 'block';
+            videoTime.textContent = new Date(timestamp * 1000).toLocaleString('zh-TW');
+
+            // 更新當前影片狀態
+            currentVideo.textContent = `messenger_${videoHash.substring(0, 8)}`;
+
+            console.log('✅ 影片已載入:', videoUrl);
         }
 
         function showNotification(message, type = 'success') {
@@ -582,33 +480,38 @@
 
         socket.on('messenger_upload', async (data) => {
             console.log('📨 收到 Messenger 上傳事件:', data);
-            
+
             if (data.status === 'start') {
                 // 開始動畫
                 statusText.textContent = `Messenger Bot 處理中: ${data.video_name}`;
-                fileName.textContent = data.video_name;
-                
+                currentVideo.textContent = data.video_name;
+
                 // 啟動傳送帶和影片動畫
                 beltStripes.classList.add('moving');
                 videoPackage.classList.add('moving');
-                
+
                 showNotification(`📱 Messenger Bot 上傳影片: ${data.video_name}`, 'success');
-                
+
             } else if (data.status === 'complete') {
                 // 完成動畫
                 showDingEffect();
-                
+
                 await sleep(300);
                 outputMessage.textContent = data.message;
                 outputMessage.classList.add('show');
-                statusText.textContent = '處理完成！(Messenger Bot)';
-                
+                statusText.textContent = '影片處理完成！';
+
                 totalProcessed++;
                 processedCount.textContent = totalProcessed;
-                
+
+                // 載入影片到播放器
+                if (data.video_url && data.video_hash) {
+                    loadVideo(data.video_url, data.video_hash, data.timestamp);
+                }
+
                 showNotification(data.message, 'success');
-                
-                // 3秒後重置
+
+                // 3秒後重置動畫（但保留影片）
                 await sleep(3000);
                 resetProductionLine();
             }

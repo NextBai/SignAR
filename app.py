@@ -3,7 +3,7 @@ import sys
 import json
 import hashlib
 import requests
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_file
 from flask_socketio import SocketIO, emit
 from pathlib import Path
 from werkzeug.utils import secure_filename
@@ -138,7 +138,7 @@ def send_hello_world_to_messenger():
     print("📨 已發送 Hello World 到 Messenger Bot")
     return True
 
-def trigger_frontend_animation(video_name="messenger_video", is_duplicate=False):
+def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is_duplicate=False):
     """觸發前端動畫（用於 Messenger Bot 上傳）"""
     def run_animation():
         # 發送開始處理事件
@@ -146,17 +146,20 @@ def trigger_frontend_animation(video_name="messenger_video", is_duplicate=False)
             'status': 'start',
             'video_name': video_name
         })
-        
+
         # 等待動畫完成（4秒）
         time.sleep(3.5)
-        
+
         # 發送完成事件
-        message = "此影片已處理過！Hello World（重複影片）" if is_duplicate else "Hello World! 影片處理完成並已刪除"
+        message = "此影片已處理過！Hello World（重複影片）" if is_duplicate else "Hello World! 影片處理完成"
         socketio.emit('messenger_upload', {
             'status': 'complete',
-            'message': message
+            'message': message,
+            'video_url': f'/videos/{video_hash}' if video_hash else None,
+            'video_hash': video_hash,
+            'timestamp': time.time()
         })
-    
+
     # 在背景執行緒中執行動畫
     thread = threading.Thread(target=run_animation)
     thread.daemon = True
@@ -167,70 +170,6 @@ def index():
     """前端頁面"""
     return render_template('index.html')
 
-@app.route('/upload', methods=['POST'])
-def upload_video():
-    """處理前端上傳的影片"""
-    global processed_count
-    
-    try:
-        if 'video' not in request.files:
-            return jsonify({'success': False, 'message': '沒有上傳檔案'}), 400
-        
-        file = request.files['video']
-        
-        if file.filename == '':
-            return jsonify({'success': False, 'message': '沒有選擇檔案'}), 400
-        
-        if not allowed_file(file.filename):
-            return jsonify({'success': False, 'message': '不支援的檔案格式'}), 400
-        
-        # 計算影片哈希值
-        video_hash = get_video_hash(file)
-        
-        # 檢查是否已處理過
-        if video_hash in DOWNLOADED_VIDEOS:
-            print(f"影片已存在，跳過儲存: {video_hash}")
-            message = "此影片已處理過！Hello World（重複影片）"
-        else:
-            # 暫時儲存影片
-            filename = secure_filename(file.filename)
-            temp_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}_{filename}")
-            file.save(temp_path)
-            
-            # 記錄此影片
-            DOWNLOADED_VIDEOS.add(video_hash)
-            save_downloaded_videos()
-            
-            print(f"成功儲存影片: {temp_path}")
-            
-            # 模擬處理完成後刪除影片
-            time.sleep(0.5)  # 短暫延遲
-            try:
-                os.remove(temp_path)
-                print(f"已刪除影片: {temp_path}")
-            except Exception as e:
-                print(f"刪除影片失敗: {e}")
-            
-            message = "Hello World! 影片處理完成並已刪除"
-        
-        # 發送訊息到 Messenger
-        send_hello_world_to_messenger()
-        
-        # 更新處理計數
-        processed_count += 1
-        save_processed_count()
-        
-        return jsonify({
-            'success': True,
-            'message': message,
-            'video_hash': video_hash,
-            'is_duplicate': video_hash in DOWNLOADED_VIDEOS
-        }), 200
-        
-    except Exception as e:
-        print(f"處理影片時發生錯誤: {e}")
-        return jsonify({'success': False, 'message': f'處理失敗: {str(e)}'}), 500
-
 @app.route('/stats', methods=['GET'])
 def get_stats():
     """取得統計資訊"""
@@ -238,6 +177,32 @@ def get_stats():
         'processed_count': processed_count,
         'unique_videos': len(DOWNLOADED_VIDEOS)
     }), 200
+
+@app.route('/videos/<video_hash>')
+def serve_video(video_hash):
+    """提供影片檔案"""
+    file_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
+    if os.path.exists(file_path):
+        return send_file(file_path, mimetype='video/mp4')
+    else:
+        return jsonify({'error': 'Video not found'}), 404
+
+@app.route('/api/videos', methods=['GET'])
+def get_videos():
+    """取得所有影片清單"""
+    videos = []
+    for hash_val in DOWNLOADED_VIDEOS:
+        file_path = os.path.join(VIDEO_STORAGE_PATH, f"{hash_val}.mp4")
+        if os.path.exists(file_path):
+            videos.append({
+                'hash': hash_val,
+                'url': f'/videos/{hash_val}',
+                'timestamp': os.path.getmtime(file_path),
+                'size': os.path.getsize(file_path)
+            })
+    # 依時間排序（最新的在前）
+    videos.sort(key=lambda x: x['timestamp'], reverse=True)
+    return jsonify(videos), 200
 
 @app.route('/webhook', methods=['GET'])
 def verify():
@@ -292,33 +257,37 @@ def webhook():
                                 
                                 print(f"🔑 影片哈希: {video_hash}")
                                 print(f"🔄 是否重複: {is_duplicate}")
-                                
-                                # 觸發前端動畫
-                                trigger_frontend_animation(f"messenger_{video_hash[:8]}", is_duplicate)
-                                
+
                                 # 檢查是否已下載過
                                 if is_duplicate:
                                     print(f"⏭️ 影片已存在，跳過下載: {video_hash}")
+                                    # 觸發前端動畫（重複影片）
+                                    trigger_frontend_animation(
+                                        video_name=f"messenger_{video_hash[:8]}",
+                                        video_hash=video_hash,
+                                        is_duplicate=True
+                                    )
                                     send_message(sender_id, "Hello World")
                                 else:
                                     # 下載新影片
                                     print(f"⬇️ 開始下載影片...")
                                     success, file_path = download_video(video_url, video_hash)
-                                    
+
                                     if success:
                                         DOWNLOADED_VIDEOS.add(video_hash)
                                         save_downloaded_videos()
                                         print(f"✅ 成功下載影片: {file_path}")
-                                        
-                                        # 處理完成後刪除影片
-                                        try:
-                                            os.remove(file_path)
-                                            print(f"🗑️ 已刪除影片: {file_path}")
-                                        except Exception as e:
-                                            print(f"❌ 刪除影片失敗: {e}")
+                                        print(f"💾 影片已保留供前端播放")
+
+                                        # 觸發前端動畫（新影片）
+                                        trigger_frontend_animation(
+                                            video_name=f"messenger_{video_hash[:8]}",
+                                            video_hash=video_hash,
+                                            is_duplicate=False
+                                        )
                                     else:
                                         print(f"❌ 下載影片失敗")
-                                    
+
                                     # 無論下載成功與否，都回傳 Hello World
                                     send_message(sender_id, "Hello World")
                                 
