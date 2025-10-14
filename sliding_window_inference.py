@@ -191,13 +191,14 @@ class SlidingWindowInference:
         # 載入模型
         self._load_model(model_path, label_map_path)
         
-        # 初始化特徵提取器
-        self._init_extractors()
+        # 延遲初始化特徵提取器（首次使用時才載入）
+        self.rgb_extractor = None
+        self.skeleton_extractor = None
         
-        # 預熱模型
-        self._warmup_model()
+        # 延遲預熱模型（首次推論時自動預熱）
+        self._model_warmed_up = False
         
-        print("✅ 系統初始化完成！\n")
+        print("✅ 系統初始化完成！（特徵提取器將延遲載入）\n")
     
     def _load_model(self, model_path, label_map_path):
         """載入模型和標籤"""
@@ -222,37 +223,40 @@ class SlidingWindowInference:
         
         print(f"✅ 模型載入成功（{len(self.label_map)} 個單詞）")
     
-    def _warmup_model(self):
-        """預熱模型"""
-        print("🔥 預熱模型（CPU 模式）...")
-        dummy_input = np.zeros((1, 300, 1119), dtype=np.float32)
-        
-        with tf.device('/CPU:0'):
-            _ = self.model.predict(dummy_input, verbose=0)
-        
-        print("✅ 模型預熱完成")
+    def _ensure_extractors_initialized(self):
+        """確保特徵提取器已初始化（延遲載入）"""
+        if self.rgb_extractor is None or self.skeleton_extractor is None:
+            print("🔧 初始化特徵提取器...")
+            
+            # RGB 特徵提取器
+            if self.device == 'mps':
+                torch_device = torch.device('mps')
+                device_type = 'gpu'
+            elif self.device == 'gpu':
+                torch_device = torch.device('cuda')
+                device_type = 'gpu'
+            else:
+                torch_device = torch.device('cpu')
+                device_type = 'cpu'
+            
+            self.rgb_extractor = RGBFeatureExtractor(torch_device, device_type)
+            
+            # 骨架特徵提取器
+            self.skeleton_extractor = EnhancedSkeletonExtractor(num_threads=4)
+            
+            print("✅ 特徵提取器初始化完成")
     
-    def _init_extractors(self):
-        """初始化特徵提取器"""
-        print("🔧 初始化特徵提取器...")
-        
-        # RGB 特徵提取器
-        if self.device == 'mps':
-            torch_device = torch.device('mps')
-            device_type = 'gpu'
-        elif self.device == 'gpu':
-            torch_device = torch.device('cuda')
-            device_type = 'gpu'
-        else:
-            torch_device = torch.device('cpu')
-            device_type = 'cpu'
-        
-        self.rgb_extractor = RGBFeatureExtractor(torch_device, device_type)
-        
-        # 骨架特徵提取器
-        self.skeleton_extractor = EnhancedSkeletonExtractor(num_threads=4)
-        
-        print("✅ 特徵提取器初始化完成")
+    def _ensure_model_warmed_up(self):
+        """確保模型已預熱（延遲預熱）"""
+        if not self._model_warmed_up:
+            print("🔥 預熱模型（CPU 模式）...")
+            dummy_input = np.zeros((1, 300, 1119), dtype=np.float32)
+            
+            with tf.device('/CPU:0'):
+                _ = self.model.predict(dummy_input, verbose=0)
+            
+            self._model_warmed_up = True
+            print("✅ 模型預熱完成")
     
     def load_and_normalize_video(self, video_path):
         """
@@ -310,13 +314,16 @@ class SlidingWindowInference:
     def extract_window_features(self, frames):
         """
         提取窗口特徵（並行 RGB + Skeleton）
-        
+
         Args:
             frames: 窗口幀列表 (80, 224, 224, 3)
-        
+
         Returns:
             features: (300, 1119) 特徵矩陣
         """
+        # 確保特徵提取器已初始化
+        self._ensure_extractors_initialized()
+
         # 並行提取特徵
         rgb_features = None
         skeleton_features = None
@@ -376,23 +383,26 @@ class SlidingWindowInference:
     def predict_window(self, features):
         """
         對單個窗口進行推論
-        
+
         Args:
             features: (300, 1119) 特徵矩陣
-        
+
         Returns:
             top5: [(單詞, 信心度), ...] Top-5 結果
         """
+        # 確保模型已預熱
+        self._ensure_model_warmed_up()
+
         features_batch = np.expand_dims(features, axis=0)
-        
+
         # 強制使用 CPU 推論（BiGRU 在 CPU 上比 MPS 快 23 倍）
         with tf.device('/CPU:0'):
             predictions = self.model.predict(features_batch, verbose=0)
-        
+
         # 獲取 Top-5
         top_indices = np.argsort(predictions[0])[::-1][:5]
         results = [(self.idx_to_word[idx], float(predictions[0][idx])) for idx in top_indices]
-        
+
         return results
     
     def process_video(self, video_path, save_results=True):
