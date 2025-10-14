@@ -181,7 +181,7 @@ def send_message(recipient_id, message_text):
         print(f"❌ 發送訊息失敗: {e}")
         return False
 
-def process_video_and_get_sentence(video_path):
+def process_video_and_get_sentence(video_path, socketio_instance=None):
     """處理影片並返回識別的句子"""
     global sign_language_recognizer
     
@@ -192,22 +192,72 @@ def process_video_and_get_sentence(video_path):
     try:
         print(f"🎬 開始處理影片: {video_path}")
         
+        # 創建進度回調函數
+        def progress_callback(current, total, message):
+            if socketio_instance:
+                progress_percent = int((current / total) * 100) if total > 0 else 0
+                socketio_instance.emit('processing_progress', {
+                    'progress': progress_percent,
+                    'current': current,
+                    'total': total,
+                    'message': message,
+                    'timestamp': time.time()
+                }, namespace='/')
+                print(f"📊 進度: {progress_percent}% - {message}")
+        
+        # 創建帶進度回調的識別器實例
+        from sliding_window_inference import SlidingWindowInference
+        
+        temp_recognizer = SlidingWindowInference(
+            model_path=str(Path(__file__).parent / 'model_output' / 'best_model_mps.keras'),
+            label_map_path=str(Path(__file__).parent / 'model_output' / 'label_map.json'),
+            device='cpu',  # 使用CPU以確保兼容性
+            stride=80,
+            openai_api_key=OPENAI_API_KEY,
+            progress_callback=progress_callback
+        )
+        
         # 處理影片（不保存 JSON 結果）
-        results = sign_language_recognizer.process_video(
+        results = temp_recognizer.process_video(
             video_path=video_path,
             save_results=False
         )
         
         # 使用 OpenAI 重組句子
-        if OPENAI_API_KEY and sign_language_recognizer.openai_client:
-            sentence, explanation = sign_language_recognizer.compose_sentence_with_openai(results)
+        if OPENAI_API_KEY and temp_recognizer.openai_client:
+            sentence, explanation = temp_recognizer.compose_sentence_with_openai(results)
             print(f"✅ 識別完成: {sentence}")
+            
+            # 發送完成事件
+            if socketio_instance:
+                # 從video_path中提取hash（如果可能的話）
+                video_hash = None
+                if video_path and isinstance(video_path, str):
+                    # 嘗試從路徑中提取hash
+                    import os
+                    filename = os.path.basename(video_path)
+                    if filename.endswith('.mp4'):
+                        video_hash = filename[:-4]  # 移除.mp4擴展名
+                
+                send_processing_complete(video_hash, sentence)
+            
             return sentence
         else:
             # 如果沒有 OpenAI，返回 Top-1 單詞序列
-            words = [result['top1'][0] for result in results]
+            words = [result['top5'][0]['word'] for result in results]
             sentence = ' '.join(words)
             print(f"✅ 識別完成 (無 OpenAI): {sentence}")
+            
+            # 發送完成事件
+            if socketio_instance:
+                video_hash = None
+                if video_path and isinstance(video_path, str):
+                    filename = os.path.basename(video_path)
+                    if filename.endswith('.mp4'):
+                        video_hash = filename[:-4]
+                
+                send_processing_complete(video_hash, sentence)
+            
             return sentence
             
     except Exception as e:
@@ -216,12 +266,18 @@ def process_video_and_get_sentence(video_path):
         traceback.print_exc()
         return "Hello World! (處理失敗)"
 
-def send_hello_world_to_messenger():
-    """發送 Hello World 到 Messenger（模擬）"""
-    # 這裡可以實作實際的 Messenger 推播
-    # 由於沒有特定的 recipient_id，這裡只是記錄
-    print("📨 已發送 Hello World 到 Messenger Bot")
-    return True
+def send_processing_complete(video_hash, recognized_sentence):
+    """發送處理完成事件"""
+    with app.app_context():
+        socketio.emit('messenger_upload', {
+            'status': 'complete',
+            'message': f"識別結果: {recognized_sentence}",
+            'recognized_sentence': recognized_sentence,
+            'video_url': f'/videos/{video_hash}' if video_hash else None,
+            'video_hash': video_hash,
+            'timestamp': time.time()
+        }, namespace='/')
+        print(f"🔔 已發送完成動畫事件: {recognized_sentence}")
 
 def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is_duplicate=False, recognized_sentence=None):
     """觸發前端動畫（用於 Messenger Bot 上傳）"""
@@ -230,29 +286,17 @@ def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is
             # 發送開始處理事件
             socketio.emit('messenger_upload', {
                 'status': 'start',
-                'video_name': video_name
+                'video_name': video_name,
+                'recognized_sentence': recognized_sentence or "處理中..."
             }, namespace='/')
 
             print(f"🔔 已發送開始動畫事件: {video_name}")
 
-            # 等待動畫完成（3.5秒）
-            time.sleep(3.5)
-
-            # 發送完成事件
-            if recognized_sentence:
-                message = f"識別結果: {recognized_sentence}"
-            else:
-                message = "此影片已處理過！Hello World（重複影片）" if is_duplicate else "Hello World! 影片處理完成"
+            # 不等待固定時間，而是等待處理完成訊號
+            # 進度會通過 processing_progress 事件即時更新
             
-            socketio.emit('messenger_upload', {
-                'status': 'complete',
-                'message': message,
-                'video_url': f'/videos/{video_hash}' if video_hash else None,
-                'video_hash': video_hash,
-                'timestamp': time.time()
-            }, namespace='/')
-
-            print(f"🔔 已發送完成動畫事件: {message}")
+            # 等待完成事件（這個會由 process_video_and_get_sentence 完成後觸發）
+            # 這裡我們不手動發送完成事件，而是讓它自然結束
 
     # 在背景執行緒中執行動畫
     thread = threading.Thread(target=run_animation)
@@ -358,7 +402,7 @@ def webhook():
                                     file_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
                                     
                                     # 處理影片並獲取識別結果
-                                    recognized_sentence = process_video_and_get_sentence(file_path)
+                                    recognized_sentence = process_video_and_get_sentence(file_path, socketio)
                                     
                                     # 觸發前端動畫（重複影片）
                                     trigger_frontend_animation(
@@ -382,7 +426,7 @@ def webhook():
                                         print(f"💾 影片已保留供前端播放")
 
                                         # 處理影片並獲取識別結果
-                                        recognized_sentence = process_video_and_get_sentence(file_path)
+                                        recognized_sentence = process_video_and_get_sentence(file_path, socketio)
                                         
                                         # 觸發前端動畫（新影片）
                                         trigger_frontend_animation(

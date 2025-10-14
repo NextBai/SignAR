@@ -149,7 +149,7 @@ class SlidingWindowInference:
     TARGET_WIDTH = 224      # 目標寬度
     TARGET_HEIGHT = 224     # 目標高度
     
-    def __init__(self, model_path, label_map_path, device='mps', stride=80, openai_api_key=None):
+    def __init__(self, model_path, label_map_path, device='mps', stride=80, openai_api_key=None, progress_callback=None):
         """
         初始化滑動窗口識別器
         
@@ -162,12 +162,14 @@ class SlidingWindowInference:
                    - 60 幀：25% 重疊，平衡
                    - 40 幀：50% 重疊，更密集檢測
             openai_api_key: OpenAI API 金鑰（用於句子重組）
+            progress_callback: 進度回調函數，參數為 (current, total, message)
         
         注意：訓練數據平均單詞長度為 88 幀（3.1 秒）
         """
         self.device = device
         self.stride = stride
         self.openai_client = None
+        self.progress_callback = progress_callback
         
         # 初始化 OpenAI
         if openai_api_key:
@@ -421,6 +423,10 @@ class SlidingWindowInference:
         print(f"  每個窗口: {self.WINDOW_SIZE} 幀 ({self.WINDOW_SIZE / self.TARGET_FPS:.2f} 秒)")
         print("=" * 70)
         
+        # 發送初始進度
+        if self.progress_callback:
+            self.progress_callback(0, num_windows, "開始處理影片")
+        
         # 3. 遍歷所有窗口
         all_results = []
         
@@ -434,6 +440,10 @@ class SlidingWindowInference:
             
             print(f"\n窗口 {i+1}/{num_windows} - 時間: {time_start:.2f}s - {time_end:.2f}s")
             
+            # 發送窗口開始進度
+            if self.progress_callback:
+                self.progress_callback(i, num_windows, f"處理窗口 {i+1}/{num_windows}")
+            
             # 提取窗口幀
             window_frames = frames[window_start:window_end]
             
@@ -444,11 +454,19 @@ class SlidingWindowInference:
                 t1 = time.time()
                 print(f"  ✅ 特徵提取: {(t1-t0)*1000:.0f}ms")
                 
+                # 發送特徵提取完成進度
+                if self.progress_callback:
+                    self.progress_callback(i + 0.3, num_windows, f"特徵提取完成 - 窗口 {i+1}")
+                
                 # 推論
                 t0 = time.time()
                 top5 = self.predict_window(features)
                 t1 = time.time()
                 print(f"  ✅ 推論: {(t1-t0)*1000:.0f}ms")
+                
+                # 發送推論完成進度
+                if self.progress_callback:
+                    self.progress_callback(i + 0.7, num_windows, f"推論完成 - 窗口 {i+1}")
                 
                 # 顯示結果
                 print(f"  🎯 Top-5 結果:")
@@ -467,8 +485,14 @@ class SlidingWindowInference:
                 }
                 all_results.append(window_result)
                 
+                # 發送窗口完成進度
+                if self.progress_callback:
+                    self.progress_callback(i + 1, num_windows, f"窗口 {i+1} 完成")
+                
             except Exception as e:
                 print(f"  ❌ 處理失敗: {e}")
+                if self.progress_callback:
+                    self.progress_callback(i + 1, num_windows, f"窗口 {i+1} 失敗")
                 continue
         
         total_time = time.time() - start_time

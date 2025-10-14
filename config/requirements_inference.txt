@@ -7,7 +7,7 @@ keras>=3.0.0                  # Keras 3
 
 # PyTorch（特徵提取）
 torch>=2.0.0                  # M1 MPS 支持
-torchvision>=0.15.0          # 視覺模型
+torchvision>=0.16.0          # 視覺模型
 
 # 視頻處理
 opencv-python>=4.8.0         # OpenCV

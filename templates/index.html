@@ -183,6 +183,7 @@
             font-weight: bold;
             color: #48bb78;
             animation: pop 0.5s ease-out;
+            position: relative;
         }
 
         .output-message.show {
@@ -193,6 +194,58 @@
             0% { transform: scale(0); opacity: 0; }
             50% { transform: scale(1.1); }
             100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* 進度條樣式 */
+        .progress-container {
+            width: 100%;
+            background: #e2e8f0;
+            border-radius: 10px;
+            height: 20px;
+            margin: 10px 0;
+            overflow: hidden;
+            display: none;
+        }
+
+        .progress-container.show {
+            display: block;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #48bb78, #38a169);
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 10px;
+        }
+
+        .progress-text {
+            text-align: center;
+            font-size: 0.9em;
+            color: #4a5568;
+            margin-top: 5px;
+        }
+
+        /* TTS 按鈕 */
+        .tts-button {
+            background: #3182ce;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-top: 10px;
+            transition: all 0.3s;
+        }
+
+        .tts-button:hover {
+            background: #2c5282;
+        }
+
+        .tts-button:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
         }
 
         /* 叮的特效 */
@@ -356,9 +409,21 @@
                 <div class="output-icon">📤</div>
                 <h3>輸出區</h3>
                 <p>處理完成後顯示</p>
+                
+                <!-- 進度條 -->
+                <div class="progress-container" id="progressContainer">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+                <div class="progress-text" id="progressText">準備處理...</div>
+                
                 <div class="output-message" id="outputMessage">
                     Hello World! ✨
                 </div>
+                
+                <!-- TTS 按鈕 -->
+                <button class="tts-button" id="ttsButton" onclick="speakResult()">
+                    🔊 語音播報
+                </button>
             </div>
         </div>
 
@@ -401,8 +466,83 @@
         const videoInfo = document.getElementById('videoInfo');
         const videoTime = document.getElementById('videoTime');
         const waitingText = document.getElementById('waitingText');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const ttsButton = document.getElementById('ttsButton');
 
         let totalProcessed = 0;
+        let currentRecognizedSentence = "";
+
+        function speakResult() {
+            if (!currentRecognizedSentence) {
+                alert('沒有可播報的內容');
+                return;
+            }
+            
+            // 檢查瀏覽器是否支持語音合成
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(currentRecognizedSentence);
+                
+                // 設置語音參數
+                utterance.lang = 'zh-TW'; // 設定為中文
+                utterance.rate = 0.8; // 語速
+                utterance.pitch = 1; // 音調
+                utterance.volume = 1; // 音量
+                
+                // 禁用按鈕並顯示狀態
+                ttsButton.disabled = true;
+                ttsButton.textContent = '🔊 播報中...';
+                
+                utterance.onend = function() {
+                    ttsButton.disabled = false;
+                    ttsButton.textContent = '🔊 語音播報';
+                };
+                
+                utterance.onerror = function() {
+                    ttsButton.disabled = false;
+                    ttsButton.textContent = '🔊 語音播報';
+                    alert('語音播報失敗');
+                };
+                
+                speechSynthesis.speak(utterance);
+            } else {
+                alert('您的瀏覽器不支持語音合成功能');
+            }
+        }
+
+        function updateProgress(progress, message) {
+            progressContainer.classList.add('show');
+            progressBar.style.width = progress + '%';
+            progressText.textContent = message;
+            
+            // 更新狀態文字
+            statusText.textContent = `處理中: ${progress}% - ${message}`;
+            
+            // 同步更新傳送帶動畫速度
+            updateConveyorBeltSpeed(progress);
+        }
+
+        function updateConveyorBeltSpeed(progress) {
+            // 根據進度調整傳送帶速度
+            // 進度越快，傳送帶越快
+            const speed = Math.max(0.5, progress / 20); // 最小0.5秒，最大5秒
+            beltStripes.style.animationDuration = speed + 's';
+            
+            // 確保傳送帶在動
+            if (!beltStripes.classList.contains('moving')) {
+                beltStripes.classList.add('moving');
+            }
+        }
+
+        function hideProgress() {
+            progressContainer.classList.remove('show');
+            progressBar.style.width = '0%';
+            progressText.textContent = '準備處理...';
+            
+            // 重置傳送帶速度
+            beltStripes.style.animationDuration = '2s';
+        }
 
         function showDingEffect() {
             const ding = document.createElement('div');
@@ -421,6 +561,8 @@
             videoPackage.classList.remove('moving');
             outputMessage.classList.remove('show');
             statusText.textContent = '等待 Messenger Bot 傳送影片';
+            hideProgress(); // 重置進度條
+            ttsButton.disabled = true; // 禁用TTS按鈕
 
             // 重置動畫
             setTimeout(() => {
@@ -495,6 +637,7 @@
                 // 開始動畫
                 statusText.textContent = `Messenger Bot 處理中: ${data.video_name}`;
                 currentVideo.textContent = data.video_name;
+                currentRecognizedSentence = data.recognized_sentence || "處理中...";
 
                 // 啟動傳送帶和影片動畫
                 beltStripes.classList.add('moving');
@@ -507,9 +650,17 @@
                 showDingEffect();
 
                 await sleep(300);
-                outputMessage.textContent = data.message;
+                
+                // 更新句子並顯示
+                currentRecognizedSentence = data.recognized_sentence || data.message.replace("識別結果: ", "");
+                outputMessage.textContent = currentRecognizedSentence;
                 outputMessage.classList.add('show');
+                
+                // 啟用TTS按鈕
+                ttsButton.disabled = false;
+                
                 statusText.textContent = '影片處理完成！';
+                hideProgress(); // 隱藏進度條
 
                 totalProcessed++;
                 processedCount.textContent = totalProcessed;
@@ -521,10 +672,19 @@
 
                 showNotification(data.message, 'success');
 
+                // 自動播報（可選）
+                // setTimeout(() => speakResult(), 1000);
+
                 // 3秒後重置動畫（但保留影片）
                 await sleep(3000);
                 resetProductionLine();
             }
+        });
+
+        // 處理進度更新事件
+        socket.on('processing_progress', (data) => {
+            console.log('📊 收到進度更新:', data);
+            updateProgress(data.progress, data.message);
         });
 
         socket.on('disconnect', () => {
