@@ -10,9 +10,6 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    libgoogle-glog-dev \
-    libgthread-2.0-0 \
-    libgtk2.0-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
