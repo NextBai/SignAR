@@ -8,8 +8,8 @@ eventlet==0.35.2
 werkzeug==3.0.1
 
 # Deep Learning
-tensorflow==2.15.0
-keras==3.0.0
+tensorflow>=2.16.0  # 支持 Keras 3 的 TensorFlow 版本
+keras>=3.0.0       # Keras 3
 torch==2.1.0
 torchvision==0.16.0
 
