@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.10-slim-bookworm
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    libgoogle-glog0v5 \
+    libglog-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 複製依賴文件
