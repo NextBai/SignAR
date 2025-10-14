@@ -1,0 +1,17 @@
+{
+  "deaf": 0,
+  "eat": 1,
+  "fish": 2,
+  "friend": 3,
+  "happy": 4,
+  "like": 5,
+  "nice": 6,
+  "orange": 7,
+  "sister": 8,
+  "student": 9,
+  "teacher": 10,
+  "want": 11,
+  "what": 12,
+  "white": 13,
+  "yes": 14
+}

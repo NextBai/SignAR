@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "10000:10000"
+    environment:
+      - MESSENGER_VERIFY_TOKEN=${MESSENGER_VERIFY_TOKEN}
+      - PAGE_ACCESS_TOKEN=${PAGE_ACCESS_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY:-video-processing-secret-key}
+      - DATA_DIR=/app/data
+      - PORT=10000
+      - KERAS_BACKEND=tensorflow
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/app/data
+      - ./model_output:/app/model_output
+      - ./feature_extraction:/app/feature_extraction
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

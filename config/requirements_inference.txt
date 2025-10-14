@@ -1,0 +1,31 @@
+# 手語識別推論依賴（M1 Mac 優化）
+
+# 核心深度學習框架
+tensorflow-macos>=2.15.0      # M1 Mac TensorFlow
+tensorflow-metal>=1.1.0       # M1 GPU 加速
+keras>=3.0.0                  # Keras 3
+
+# PyTorch（特徵提取）
+torch>=2.0.0                  # M1 MPS 支持
+torchvision>=0.15.0          # 視覺模型
+
+# 視頻處理
+opencv-python>=4.8.0         # OpenCV
+
+# YOLO 骨架檢測
+ultralytics>=8.0.0           # YOLOv11-pose
+
+# OpenAI API（句子重組）- 支持 GPT-5 系列
+openai>=1.40.0              # OpenAI API，支持最新模型
+
+# 工具庫
+numpy>=1.24.0
+tqdm>=4.65.0
+psutil>=5.9.0
+
+# 注意：
+# 1. M1 Mac 必須使用 tensorflow-macos 和 tensorflow-metal
+# 2. 其他平台使用標準 tensorflow>=2.15.0
+# 3. PyTorch 會自動檢測並使用 M1 MPS
+# 4. OpenAI 套件需要 >=1.40.0 才能支持 GPT-5 系列模型
+

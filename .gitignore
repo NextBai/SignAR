@@ -4,54 +4,51 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
-.env
-.venv
-env/
 venv/
+env/
 ENV/
-env.bak/
-venv.bak/
+*.egg-info/
+dist/
+build/
 
-# Application specific
-downloaded_videos/
-downloaded_videos.json
-processed_count.json
+# Environment variables
+.env
+.env.local
+
+# Data directories
+data/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.webm
+
+# Model checkpoints (if too large for Git)
+# model_output/*.keras
+# model_output/*.h5
 
 # Logs
 *.log
-
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+tensorboard_logs/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
+.DS_Store
 
-# Claude Code
-.claude/
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

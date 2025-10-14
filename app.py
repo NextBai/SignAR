@@ -12,6 +12,15 @@ from pathlib import Path
 from werkzeug.utils import secure_filename
 import time
 import threading
+import numpy as np
+
+# 添加專案路徑到 sys.path
+sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent / "feature_extraction"))
+
+# 設置 Keras backend
+os.environ['KERAS_BACKEND'] = 'tensorflow'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # 強制標準輸出和錯誤輸出無緩衝，確保日誌即時顯示
 sys.stdout.reconfigure(line_buffering=True)
@@ -43,6 +52,10 @@ processed_count = 0
 # 從 Hugging Face Secrets 或環境變數獲取設定
 VERIFY_TOKEN = os.environ.get("MESSENGER_VERIFY_TOKEN", "your_verify_token_here")
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN", "your_page_access_token_here")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
+
+# 手語識別器全局變量
+sign_language_recognizer = None
 
 # 初始化
 def init_storage():
@@ -67,6 +80,40 @@ def init_storage():
                 processed_count = data.get('count', 0)
             except json.JSONDecodeError:
                 processed_count = 0
+
+def init_sign_language_recognizer():
+    """初始化手語識別器"""
+    global sign_language_recognizer
+    
+    try:
+        from sliding_window_inference import SlidingWindowInference
+        
+        model_path = Path(__file__).parent / 'model_output' / 'best_model_mps.keras'
+        label_path = Path(__file__).parent / 'model_output' / 'label_map.json'
+        
+        if not model_path.exists():
+            print(f"⚠️ 模型文件不存在: {model_path}")
+            return False
+        
+        if not label_path.exists():
+            print(f"⚠️ 標籤文件不存在: {label_path}")
+            return False
+        
+        print("🔧 正在初始化手語識別器...")
+        sign_language_recognizer = SlidingWindowInference(
+            model_path=str(model_path),
+            label_map_path=str(label_path),
+            device='cpu',  # 使用 CPU 以確保兼容性
+            stride=80,
+            openai_api_key=OPENAI_API_KEY
+        )
+        print("✅ 手語識別器初始化成功")
+        return True
+    except Exception as e:
+        print(f"❌ 手語識別器初始化失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 def save_downloaded_videos():
     """儲存已下載影片的記錄"""
@@ -134,6 +181,41 @@ def send_message(recipient_id, message_text):
         print(f"❌ 發送訊息失敗: {e}")
         return False
 
+def process_video_and_get_sentence(video_path):
+    """處理影片並返回識別的句子"""
+    global sign_language_recognizer
+    
+    if sign_language_recognizer is None:
+        print("⚠️ 手語識別器未初始化，返回預設訊息")
+        return "Hello World! (識別器未啟用)"
+    
+    try:
+        print(f"🎬 開始處理影片: {video_path}")
+        
+        # 處理影片（不保存 JSON 結果）
+        results = sign_language_recognizer.process_video(
+            video_path=video_path,
+            save_results=False
+        )
+        
+        # 使用 OpenAI 重組句子
+        if OPENAI_API_KEY and sign_language_recognizer.openai_client:
+            sentence, explanation = sign_language_recognizer.compose_sentence_with_openai(results)
+            print(f"✅ 識別完成: {sentence}")
+            return sentence
+        else:
+            # 如果沒有 OpenAI，返回 Top-1 單詞序列
+            words = [result['top1'][0] for result in results]
+            sentence = ' '.join(words)
+            print(f"✅ 識別完成 (無 OpenAI): {sentence}")
+            return sentence
+            
+    except Exception as e:
+        print(f"❌ 影片處理失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return "Hello World! (處理失敗)"
+
 def send_hello_world_to_messenger():
     """發送 Hello World 到 Messenger（模擬）"""
     # 這裡可以實作實際的 Messenger 推播
@@ -141,7 +223,7 @@ def send_hello_world_to_messenger():
     print("📨 已發送 Hello World 到 Messenger Bot")
     return True
 
-def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is_duplicate=False):
+def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is_duplicate=False, recognized_sentence=None):
     """觸發前端動畫（用於 Messenger Bot 上傳）"""
     def run_animation():
         with app.app_context():
@@ -153,11 +235,15 @@ def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is
 
             print(f"🔔 已發送開始動畫事件: {video_name}")
 
-            # 等待動畫完成（4秒）
+            # 等待動畫完成（3.5秒）
             time.sleep(3.5)
 
             # 發送完成事件
-            message = "此影片已處理過！Hello World（重複影片）" if is_duplicate else "Hello World! 影片處理完成"
+            if recognized_sentence:
+                message = f"識別結果: {recognized_sentence}"
+            else:
+                message = "此影片已處理過！Hello World（重複影片）" if is_duplicate else "Hello World! 影片處理完成"
+            
             socketio.emit('messenger_upload', {
                 'status': 'complete',
                 'message': message,
@@ -269,13 +355,21 @@ def webhook():
                                 # 檢查是否已下載過
                                 if is_duplicate:
                                     print(f"⏭️ 影片已存在，跳過下載: {video_hash}")
+                                    file_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
+                                    
+                                    # 處理影片並獲取識別結果
+                                    recognized_sentence = process_video_and_get_sentence(file_path)
+                                    
                                     # 觸發前端動畫（重複影片）
                                     trigger_frontend_animation(
                                         video_name=f"messenger_{video_hash[:8]}",
                                         video_hash=video_hash,
-                                        is_duplicate=True
+                                        is_duplicate=True,
+                                        recognized_sentence=recognized_sentence
                                     )
-                                    send_message(sender_id, "Hello World")
+                                    
+                                    # 發送識別結果給用戶
+                                    send_message(sender_id, recognized_sentence)
                                 else:
                                     # 下載新影片
                                     print(f"⬇️ 開始下載影片...")
@@ -287,17 +381,22 @@ def webhook():
                                         print(f"✅ 成功下載影片: {file_path}")
                                         print(f"💾 影片已保留供前端播放")
 
+                                        # 處理影片並獲取識別結果
+                                        recognized_sentence = process_video_and_get_sentence(file_path)
+                                        
                                         # 觸發前端動畫（新影片）
                                         trigger_frontend_animation(
                                             video_name=f"messenger_{video_hash[:8]}",
                                             video_hash=video_hash,
-                                            is_duplicate=False
+                                            is_duplicate=False,
+                                            recognized_sentence=recognized_sentence
                                         )
+                                        
+                                        # 發送識別結果給用戶
+                                        send_message(sender_id, recognized_sentence)
                                     else:
                                         print(f"❌ 下載影片失敗")
-
-                                    # 無論下載成功與否，都回傳 Hello World
-                                    send_message(sender_id, "Hello World")
+                                        send_message(sender_id, "抱歉，影片下載失敗")
                                 
                                 # 更新處理計數
                                 processed_count += 1
@@ -310,7 +409,7 @@ def webhook():
                 elif messaging_event.get('message', {}).get('text'):
                     message_text = messaging_event['message']['text']
                     print(f"💬 收到文字訊息: {message_text}")
-                    send_message(sender_id, "Hello World")
+                    send_message(sender_id, "請傳送手語影片給我，我會幫您識別內容！")
                 else:
                     print(f"⚠️ 未知的訊息類型: {messaging_event}")
     else:
@@ -382,10 +481,14 @@ def test_websocket():
 
 if __name__ == '__main__':
     print("="*60)
-    print("🏭 影片處理生產線系統啟動中...")
+    print("🏭 手語影片識別系統啟動中...")
     print("="*60)
     
+    # 初始化儲存
     init_storage()
+    
+    # 初始化手語識別器
+    recognizer_initialized = init_sign_language_recognizer()
     
     print(f"📁 資料目錄: {DATA_DIR}")
     print(f"📄 已下載影片記錄檔: {DOWNLOADED_VIDEOS_FILE}")
@@ -393,8 +496,10 @@ if __name__ == '__main__':
     print(f"💾 影片儲存路徑: {VIDEO_STORAGE_PATH}")
     print(f"🔢 已處理影片數: {processed_count}")
     print(f"🎬 已記錄影片數: {len(DOWNLOADED_VIDEOS)}")
+    print(f"🤖 手語識別器: {'✅ 已啟用' if recognizer_initialized else '⚠️ 未啟用'}")
     print(f"🔑 Messenger Verify Token: {'已設定' if VERIFY_TOKEN != 'your_verify_token_here' else '⚠️ 未設定'}")
     print(f"🔐 Page Access Token: {'已設定' if PAGE_ACCESS_TOKEN != 'your_page_access_token_here' else '⚠️ 未設定'}")
+    print(f"🔐 OpenAI API Key: {'已設定' if OPENAI_API_KEY else '⚠️ 未設定'}")
     
     port = int(os.environ.get('PORT', 7860))
     print(f"🌐 啟動 WebSocket 服務於 0.0.0.0:{port}")

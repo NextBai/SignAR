@@ -1,0 +1,18 @@
+{
+  "training_time": "0:06:58.042411",
+  "total_samples": 4440,
+  "num_classes": 15,
+  "global_batch_size": 512,
+  "tpu_cores": 8,
+  "epochs": 50,
+  "final_metrics": {
+    "train_loss": 0.31592854857444763,
+    "train_accuracy": 0.9853515625,
+    "val_loss": 0.09599938243627548,
+    "val_accuracy": 1.0
+  },
+  "best_metrics": {
+    "best_val_accuracy": 1.0,
+    "best_epoch": 40
+  }
+}
