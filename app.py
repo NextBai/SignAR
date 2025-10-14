@@ -54,16 +54,18 @@ VERIFY_TOKEN = os.environ.get("MESSENGER_VERIFY_TOKEN", "your_verify_token_here"
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN", "your_page_access_token_here")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
 
-# 手語識別器全局變量
+# 手語識別器全局變量 - 延遲載入模式
 sign_language_recognizer = None
+recognizer_initialized = False
+recognizer_initializing = False
 
 # 初始化
 def init_storage():
     """初始化儲存目錄和已下載影片記錄"""
     global processed_count
-    
+
     Path(VIDEO_STORAGE_PATH).mkdir(exist_ok=True)
-    
+
     if os.path.exists(DOWNLOADED_VIDEOS_FILE):
         with open(DOWNLOADED_VIDEOS_FILE, 'r') as f:
             try:
@@ -71,7 +73,7 @@ def init_storage():
                 DOWNLOADED_VIDEOS.update(data)
             except json.JSONDecodeError:
                 pass
-    
+
     # 載入處理計數
     if os.path.exists(PROCESSED_COUNT_FILE):
         with open(PROCESSED_COUNT_FILE, 'r') as f:
@@ -82,24 +84,36 @@ def init_storage():
                 processed_count = 0
 
 def init_sign_language_recognizer():
-    """初始化手語識別器"""
-    global sign_language_recognizer
-    
+    """延遲初始化手語識別器 - 只在需要時載入"""
+    global sign_language_recognizer, recognizer_initialized, recognizer_initializing
+
+    # 如果已經初始化，直接返回
+    if recognizer_initialized and sign_language_recognizer is not None:
+        return True
+
+    # 如果正在初始化，等待
+    if recognizer_initializing:
+        print("⏳ 識別器正在初始化中，請稍候...")
+        return False
+
     try:
+        recognizer_initializing = True
+        print("🔧 正在延遲載入手語識別器...")
+
         from sliding_window_inference import SlidingWindowInference
-        
+
         model_path = Path(__file__).parent / 'model_output' / 'best_model_mps.keras'
         label_path = Path(__file__).parent / 'model_output' / 'label_map.json'
-        
+
         if not model_path.exists():
-            print(f"⚠️ 模型文件不存在: {model_path}")
+            print(f"❌ 模型文件不存在: {model_path}")
             return False
-        
+
         if not label_path.exists():
-            print(f"⚠️ 標籤文件不存在: {label_path}")
+            print(f"❌ 標籤文件不存在: {label_path}")
             return False
-        
-        print("🔧 正在初始化手語識別器...")
+
+        print("📦 載入手語識別模型...")
         sign_language_recognizer = SlidingWindowInference(
             model_path=str(model_path),
             label_map_path=str(label_path),
@@ -107,10 +121,15 @@ def init_sign_language_recognizer():
             stride=80,
             openai_api_key=OPENAI_API_KEY
         )
-        print("✅ 手語識別器初始化成功")
+
+        recognizer_initialized = True
+        recognizer_initializing = False
+        print("✅ 手語識別器延遲載入成功")
         return True
+
     except Exception as e:
-        print(f"❌ 手語識別器初始化失敗: {e}")
+        recognizer_initializing = False
+        print(f"❌ 手語識別器延遲載入失敗: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -183,10 +202,17 @@ def send_message(recipient_id, message_text):
 
 def process_video_and_get_sentence(video_path, socketio_instance=None):
     """處理影片並返回識別的句子"""
-    global sign_language_recognizer
-    
+    global sign_language_recognizer, recognizer_initialized
+
+    # 如果識別器尚未初始化，嘗試延遲載入
+    if not recognizer_initialized:
+        print("🔄 首次使用，初始化手語識別器...")
+        if not init_sign_language_recognizer():
+            print("❌ 識別器初始化失敗，返回預設訊息")
+            return "Hello World! (識別器載入失敗)"
+
     if sign_language_recognizer is None:
-        print("⚠️ 手語識別器未初始化，返回預設訊息")
+        print("⚠️ 手語識別器仍未初始化，返回預設訊息")
         return "Hello World! (識別器未啟用)"
     
     try:
@@ -471,7 +497,9 @@ def health():
         "processed_count": processed_count,
         "data_dir": DATA_DIR,
         "verify_token_set": VERIFY_TOKEN != "your_verify_token_here",
-        "page_token_set": PAGE_ACCESS_TOKEN != "your_page_access_token_here"
+        "page_token_set": PAGE_ACCESS_TOKEN != "your_page_access_token_here",
+        "recognizer_loaded": recognizer_initialized,
+        "memory_optimized": True  # 標記為記憶體優化版本
     }), 200
 
 @app.route('/debug', methods=['GET'])
@@ -530,17 +558,14 @@ if __name__ == '__main__':
     
     # 初始化儲存
     init_storage()
-    
-    # 初始化手語識別器
-    recognizer_initialized = init_sign_language_recognizer()
-    
+
     print(f"📁 資料目錄: {DATA_DIR}")
     print(f"📄 已下載影片記錄檔: {DOWNLOADED_VIDEOS_FILE}")
     print(f"📊 處理計數檔: {PROCESSED_COUNT_FILE}")
     print(f"💾 影片儲存路徑: {VIDEO_STORAGE_PATH}")
     print(f"🔢 已處理影片數: {processed_count}")
     print(f"🎬 已記錄影片數: {len(DOWNLOADED_VIDEOS)}")
-    print(f"🤖 手語識別器: {'✅ 已啟用' if recognizer_initialized else '⚠️ 未啟用'}")
+    print(f"🤖 手語識別器: 🔄 延遲載入模式 (使用時自動載入)")
     print(f"🔑 Messenger Verify Token: {'已設定' if VERIFY_TOKEN != 'your_verify_token_here' else '⚠️ 未設定'}")
     print(f"🔐 Page Access Token: {'已設定' if PAGE_ACCESS_TOKEN != 'your_page_access_token_here' else '⚠️ 未設定'}")
     print(f"🔐 OpenAI API Key: {'已設定' if OPENAI_API_KEY else '⚠️ 未設定'}")
