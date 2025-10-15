@@ -621,12 +621,13 @@ class SlidingWindowInference:
         
         return all_results
     
-    def compose_sentence_with_openai(self, results):
+    def compose_sentence_with_openai(self, results, target_language='繁體中文'):
         """
         使用 OpenAI 從多個窗口的 Top-5 結果中組合出最有可能的句子
         
         Args:
             results: 所有窗口的辨識結果
+            target_language: 目標語言（繁體中文、英文、日文、韓文等）
         
         Returns:
             composed_sentence: 重組後的句子
@@ -634,17 +635,16 @@ class SlidingWindowInference:
         """
         if not self.openai_client:
             # 如果沒有 OpenAI，返回 Top-1 單詞序列
-            words = [result['top1'][0] for result in results]
+            words = [result['top5'][0]['word'] for result in results]
             sentence = ' '.join(words)
             return sentence, "使用 Top-1 結果組合（未配置 OpenAI）"
-            return None, None
         
         print("\n" + "=" * 70)
-        print("🤖 使用 OpenAI 分析並重組句子...")
+        print(f"🤖 使用 OpenAI 分析並重組句子（目標語言: {target_language}）...")
         print("=" * 70)
         
         # 準備提示詞
-        prompt = self._build_openai_prompt(results)
+        prompt = self._build_openai_prompt(results, target_language)
         print(f"🔍 調試: 提示詞長度: {len(prompt)} 字符")
         print(f"🔍 調試: 窗口數量: {len(results)}")
         
@@ -655,17 +655,16 @@ class SlidingWindowInference:
                 messages=[
                     {
                         "role": "system",
-                        "content": """你是一個手語識別結果分析專家。你的任務是從多個時間窗口的手語識別結果中，找出最有可能的單詞序列並組合成有意義的句子，並以使用者的角度發想「我」。
+                        "content": """你是一個手語識別結果分析專家。你的任務是從多個時間窗口的手語識別結果中，為每個窗口選出一個最合理的單詞，然後組合成有意義的句子，並以使用者的角度發想「我」。
 
-注意事項：
-1. 每個窗口都有 Top-5 的識別結果及其信心度
-2. Top-1 不一定是正確的，正確的單詞信心度通常在 10% 以上
-3. 需要考慮手語的語法結構（可能與口語不同）
-4. 同一個手勢可能在多個窗口中被識別（重複）
-5. 需要去除重複的單詞，組合成流暢的句子
-6. 如果某個單詞在多個窗口中出現且信心度都較高，說明這個單詞很重要
+關鍵規則：
+1. **每個窗口只選一個單詞**（從 Top-5 中挑選，不一定是 Top-1）
+2. 選擇依據：信心度（通常正確的單詞 ≥ 10%）+ 語義合理性
+3. 去除重複單詞（相鄰窗口可能識別同一個手勢）
+4. 組合成符合手語語法的流暢句子（可能與口語順序不同）
+5. 如果某個單詞在多個連續窗口中高信心度出現，只保留一次
 
-請分析所有窗口的結果，找出最合理的單詞序列，並組合成句子。"""
+請為每個窗口選出一個單詞，然後組合成句子。"""
                     },
                     {
                         "role": "user",
@@ -692,7 +691,7 @@ class SlidingWindowInference:
             print(f"❌ OpenAI API 調用失敗: {e}")
             return None, None
     
-    def _build_openai_prompt(self, results):
+    def _build_openai_prompt(self, results, target_language='繁體中文'):
         """構建給 OpenAI 的提示詞"""
         prompt = "以下是手語識別系統對一段影片的分析結果，共有 {} 個時間窗口：\n\n".format(len(results))
         
@@ -707,17 +706,23 @@ class SlidingWindowInference:
                 prompt += f"  {i}. {word:12s} {conf:5.2f}%\n"
             prompt += "\n"
         
-        prompt += """請分析以上結果，完成以下任務：
+        prompt += f"""請分析以上結果，完成以下任務：
 
-1. 從每個窗口的 Top-5 結果中選出最合理的單詞（不一定是 Top-1）
-2. 考慮單詞的信心度（通常正確的單詞信心度在 10% 以上）
-3. 去除重複的單詞（同一個手勢可能跨越多個窗口）
-4. 以使用者「我」的角度發想，組合成一個流暢、有意義的句子
-5. 解釋你的選擇理由
+**任務流程：**
+1. 為每個窗口從 Top-5 中選出**一個**最合理的單詞（不一定是 Top-1）
+2. 考慮信心度：通常正確的單詞 ≥ 10%
+3. 去除相鄰窗口的重複單詞（同一個手勢可能跨越多個窗口）
+4. 以使用者「我」的角度，組合成流暢、有意義的句子
+5. 說明每個窗口的選擇理由
+6. **最終句子必須翻譯成{target_language}**（保持手語原意）
 
-請用以下格式回答：
-句子：[重組後的句子]
-解釋：[詳細說明你為什麼選擇這些單詞，以及如何組合的]"""
+**輸出格式：**
+句子：[重組後的{target_language}句子]
+解釋：
+- 窗口1: 選擇「XXX」，因為...
+- 窗口2: 選擇「YYY」，因為...
+- ...
+- 最終組合邏輯：[說明如何處理重複、調整順序等]"""
         
         return prompt
     

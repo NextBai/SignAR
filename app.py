@@ -74,6 +74,243 @@ model_loading_status = {
 }
 model_loading_lock = threading.Lock()
 
+# ==================== 排隊系統 ====================
+import queue
+import asyncio
+from collections import deque
+from datetime import datetime, timedelta
+
+# 處理隊列
+processing_queue = deque()  # [(sender_id, video_path, timestamp, language), ...]
+current_processing = None  # 當前正在處理的 sender_id
+queue_lock = threading.Lock()
+
+# 用戶狀態管理
+user_states = {}  # sender_id: {'status': 'waiting_language'|'queued'|'processing', 'video_path': ..., 'language': ..., 'timer': ...}
+user_language_timers = {}  # sender_id: Timer對象
+
+# 語言識別字典
+LANGUAGE_KEYWORDS = {
+    '英文': ['english', '英文', '英語', 'en'],
+    '日文': ['japanese', '日文', '日語', '日本語', 'ja', 'jp'],
+    '韓文': ['korean', '韓文', '韓語', '한국어', 'ko', 'kr'],
+    '繁體中文': ['中文', '繁體中文', '繁中', 'chinese', 'zh', 'tw'],
+    '簡體中文': ['简体中文', '簡體中文', '简中', 'cn'],
+    '西班牙文': ['spanish', '西班牙文', '西文', 'es'],
+    '法文': ['french', '法文', '法語', 'fr'],
+    '德文': ['german', '德文', '德語', 'de'],
+}
+
+def detect_language(text):
+    """從文字中檢測語言"""
+    text_lower = text.lower().strip()
+    for language, keywords in LANGUAGE_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in text_lower:
+                return language
+    return None
+
+def language_selection_timeout(sender_id):
+    """語言選擇超時處理（5秒後執行）"""
+    with queue_lock:
+        if sender_id not in user_states:
+            return
+        
+        user_state = user_states[sender_id]
+        
+        # 如果用戶沒有選擇語言，預設繁體中文
+        if user_state.get('language') is None:
+            user_state['language'] = '繁體中文'
+            print(f"⏰ 用戶 {sender_id} 語言選擇超時，預設: 繁體中文")
+        
+        # 更新狀態為排隊中
+        user_state['status'] = 'queued'
+        
+        # 通知用戶排隊位置
+        queue_position = get_queue_position(sender_id)
+        if queue_position == 0:
+            # 第一名，馬上處理
+            send_message(sender_id, f"🎬 已收到您的手語影片！正在分析中，請稍候...")
+        else:
+            send_message(sender_id, f"📋 您目前排在第 {queue_position + 1} 位，請稍候！\n（已選擇語言: {user_state['language']}）")
+        
+        # 如果前3名，暫存影片（已經下載了，不需要額外處理）
+        if queue_position < 3:
+            print(f"💾 用戶 {sender_id} 在前3名，影片已暫存: {user_state['video_path']}")
+    
+    # 嘗試開始處理隊列
+    process_next_in_queue()
+
+def get_queue_position(sender_id):
+    """獲取用戶在隊列中的位置（0-based）"""
+    for i, (uid, _, _, _) in enumerate(processing_queue):
+        if uid == sender_id:
+            return i
+    return -1
+
+def add_to_queue(sender_id, video_path):
+    """
+    將用戶加入處理隊列
+    
+    Args:
+        sender_id: 用戶ID
+        video_path: 影片路徑
+    """
+    with queue_lock:
+        # 檢查用戶是否已在隊列中
+        for uid, _, _, _ in processing_queue:
+            if uid == sender_id:
+                print(f"⚠️ 用戶 {sender_id} 已在隊列中，忽略重複請求")
+                send_message(sender_id, "❌ 您已經在處理隊列中，請勿重複上傳！")
+                return False
+        
+        # 加入隊列
+        processing_queue.append((sender_id, video_path, datetime.now(), None))  # language 稍後設置
+        
+        # 初始化用戶狀態
+        user_states[sender_id] = {
+            'status': 'waiting_language',
+            'video_path': video_path,
+            'language': None,
+            'timestamp': datetime.now()
+        }
+        
+        print(f"✅ 用戶 {sender_id} 已加入隊列（總數: {len(processing_queue)}）")
+        
+        # 啟動5秒計時器等待語言選擇
+        timer = threading.Timer(5.0, language_selection_timeout, args=[sender_id])
+        timer.daemon = True
+        timer.start()
+        user_language_timers[sender_id] = timer
+        
+        # 發送語言選擇提示
+        send_message(sender_id, 
+            "🎬 已收到您的手語影片！\n\n"
+            "💬 請在 5 秒內回覆您想要的語言（例如：英文、日文、韓文）\n"
+            "⏱️ 如果沒有回覆，將預設使用繁體中文。"
+        )
+        
+        return True
+
+def set_user_language(sender_id, language):
+    """
+    設置用戶的語言偏好
+    
+    Args:
+        sender_id: 用戶ID
+        language: 語言名稱
+    """
+    with queue_lock:
+        if sender_id not in user_states:
+            return False
+        
+        user_state = user_states[sender_id]
+        
+        # 只有在 waiting_language 狀態下才能設置語言
+        if user_state['status'] != 'waiting_language':
+            return False
+        
+        user_state['language'] = language
+        
+        # 更新隊列中的語言
+        for i, (uid, vpath, ts, _) in enumerate(processing_queue):
+            if uid == sender_id:
+                processing_queue[i] = (uid, vpath, ts, language)
+                break
+        
+        print(f"✅ 用戶 {sender_id} 已設置語言: {language}")
+        send_message(sender_id, f"✅ 已設定輸出語言為：{language}")
+        
+        return True
+
+def process_next_in_queue():
+    """處理隊列中的下一個任務"""
+    global current_processing
+    
+    with queue_lock:
+        # 如果當前有任務正在處理，不啟動新任務
+        if current_processing is not None:
+            print(f"⏳ 當前正在處理用戶 {current_processing}，等待完成...")
+            return
+        
+        # 如果隊列為空，退出
+        if len(processing_queue) == 0:
+            print("✅ 隊列已清空")
+            return
+        
+        # 取出第一個任務（只有狀態為 'queued' 的才處理）
+        for i, (sender_id, video_path, timestamp, language) in enumerate(processing_queue):
+            if sender_id in user_states and user_states[sender_id]['status'] == 'queued':
+                # 移除並處理
+                processing_queue.remove((sender_id, video_path, timestamp, language))
+                current_processing = sender_id
+                user_states[sender_id]['status'] = 'processing'
+                
+                print(f"🎬 開始處理用戶 {sender_id} 的影片（語言: {language or '繁體中文'}）")
+                
+                # 在新線程中處理影片
+                thread = threading.Thread(
+                    target=process_video_task,
+                    args=(sender_id, video_path, language or '繁體中文'),
+                    daemon=True
+                )
+                thread.start()
+                break
+
+def process_video_task(sender_id, video_path, target_language):
+    """
+    處理影片任務（在獨立線程中執行）
+    
+    Args:
+        sender_id: 用戶ID
+        video_path: 影片路徑
+        target_language: 目標語言
+    """
+    global current_processing, processed_count
+    
+    try:
+        print(f"🎬 處理用戶 {sender_id} 的影片: {video_path}")
+        print(f"🌐 目標語言: {target_language}")
+        
+        # 處理影片並獲取識別結果
+        recognized_sentence = process_video_and_get_sentence_with_language(
+            video_path, 
+            socketio, 
+            target_language
+        )
+        
+        # 發送結果給用戶
+        send_message(sender_id, f"✅ 識別完成！\n\n📝 結果：{recognized_sentence}")
+        
+        # 更新計數
+        processed_count += 1
+        save_processed_count()
+        
+        print(f"✅ 用戶 {sender_id} 處理完成")
+        
+    except Exception as e:
+        print(f"❌ 處理用戶 {sender_id} 的影片時發生錯誤: {e}")
+        import traceback
+        traceback.print_exc()
+        send_message(sender_id, "❌ 抱歉，影片處理失敗，請稍後再試。")
+    
+    finally:
+        # 清理用戶狀態
+        with queue_lock:
+            if sender_id in user_states:
+                user_states[sender_id]['status'] = 'completed'
+                # 延遲刪除狀態（防止立即重複）
+                threading.Timer(10.0, lambda: user_states.pop(sender_id, None)).start()
+            
+            if sender_id in user_language_timers:
+                user_language_timers.pop(sender_id, None)
+            
+            current_processing = None
+            print(f"🔓 處理完成，釋放處理鎖")
+        
+        # 處理下一個任務
+        process_next_in_queue()
+
 # 初始化
 def init_storage():
     """初始化儲存目錄和已下載影片記錄"""
@@ -232,8 +469,95 @@ def send_message(recipient_id, message_text):
         print(f"❌ 發送訊息失敗: {e}")
         return False
 
+def process_video_and_get_sentence_with_language(video_path, socketio_instance=None, target_language='繁體中文'):
+    """處理影片並返回指定語言的識別句子"""
+    try:
+        print(f"🎬 開始處理影片: {video_path}")
+        print(f"🌐 目標語言: {target_language}")
+        
+        # 獲取全局識別器（檢查載入狀態）
+        recognizer = get_sign_language_recognizer()
+        
+        # 檢查模型載入狀態
+        if model_loading_status['status'] == 'loading':
+            message = f"模型載入中...({model_loading_status['progress']}%)"
+            print(f"⏳ {message}")
+            return message
+        elif model_loading_status['status'] == 'failed':
+            print(f"❌ 模型載入失敗: {model_loading_status['error']}")
+            return f"模型載入失敗: {model_loading_status['message']}"
+        elif recognizer is None:
+            print("⚠️ 手語識別器未就緒")
+            return "手語識別器未就緒，請稍後再試"
+        
+        # 創建進度回調函數
+        def progress_callback(current, total, message):
+            if socketio_instance:
+                progress_percent = int((current / total) * 100) if total > 0 else 0
+                socketio_instance.emit('processing_progress', {
+                    'progress': progress_percent,
+                    'current': current,
+                    'total': total,
+                    'message': message,
+                    'timestamp': time.time()
+                }, namespace='/')
+                print(f"📊 進度: {progress_percent}% - {message}")
+        
+        # 設定進度回調
+        recognizer.progress_callback = progress_callback
+        
+        # 處理影片（不保存 JSON 結果）
+        results = recognizer.process_video(
+            video_path=video_path,
+            save_results=False
+        )
+        
+        # 使用 OpenAI 重組句子（帶語言轉換）
+        if OPENAI_API_KEY and recognizer.openai_client:
+            sentence, explanation = recognizer.compose_sentence_with_openai(results, target_language=target_language)
+            print(f"✅ 識別完成 ({target_language}): {sentence}")
+            
+            # 發送完成事件
+            if socketio_instance:
+                video_hash = None
+                if video_path and isinstance(video_path, str):
+                    filename = os.path.basename(video_path)
+                    if filename.endswith('.mp4'):
+                        video_hash = filename[:-4]
+                
+                send_processing_complete(video_hash, sentence)
+            
+            return sentence
+        else:
+            # 如果沒有 OpenAI，返回 Top-1 單詞序列
+            words = [result['top5'][0]['word'] for result in results]
+            sentence = ' '.join(words)
+            print(f"✅ 識別完成 (無 OpenAI): {sentence}")
+            
+            # 發送完成事件
+            if socketio_instance:
+                video_hash = None
+                if video_path and isinstance(video_path, str):
+                    filename = os.path.basename(video_path)
+                    if filename.endswith('.mp4'):
+                        video_hash = filename[:-4]
+                
+                send_processing_complete(video_hash, sentence)
+            
+            return sentence
+            
+    except Exception as e:
+        print(f"❌ 影片處理失敗: {e}")
+        import traceback
+        traceback.print_exc()
+        return "Hello World! (處理失敗)"
+
 def process_video_and_get_sentence(video_path, socketio_instance=None):
-    """處理影片並返回識別的句子"""
+    """處理影片並返回識別的句子（預設繁體中文）"""
+    return process_video_and_get_sentence_with_language(video_path, socketio_instance, '繁體中文')
+
+def process_video_and_get_sentence_legacy(video_path, socketio_instance=None):
+    """舊版處理函數（保留向後兼容）"""
     try:
         print(f"🎬 開始處理影片: {video_path}")
         
@@ -408,7 +732,7 @@ def verify():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """處理 Messenger 的 Webhook 事件"""
+    """處理 Messenger 的 Webhook 事件（支援排隊系統）"""
     global processed_count
     data = request.get_json()
     
@@ -444,24 +768,10 @@ def webhook():
                                 print(f"🔑 影片哈希: {video_hash}")
                                 print(f"🔄 是否重複: {is_duplicate}")
 
-                                # 檢查是否已下載過
+                                # 下載影片（無論是否重複，都需要本地文件）
                                 if is_duplicate:
-                                    print(f"⏭️ 影片已存在，跳過下載: {video_hash}")
+                                    print(f"⏭️ 影片已存在，使用現有檔案: {video_hash}")
                                     file_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
-                                    
-                                    # 處理影片並獲取識別結果
-                                    recognized_sentence = process_video_and_get_sentence(file_path, socketio)
-                                    
-                                    # 觸發前端動畫（重複影片）
-                                    trigger_frontend_animation(
-                                        video_name=f"messenger_{video_hash[:8]}",
-                                        video_hash=video_hash,
-                                        is_duplicate=True,
-                                        recognized_sentence=recognized_sentence
-                                    )
-                                    
-                                    # 發送識別結果給用戶
-                                    send_message(sender_id, recognized_sentence)
                                 else:
                                     # 下載新影片
                                     print(f"⬇️ 開始下載影片...")
@@ -472,36 +782,68 @@ def webhook():
                                         save_downloaded_videos()
                                         print(f"✅ 成功下載影片: {file_path}")
                                         print(f"💾 影片已保留供前端播放")
-
-                                        # 處理影片並獲取識別結果
-                                        recognized_sentence = process_video_and_get_sentence(file_path, socketio)
-                                        
-                                        # 觸發前端動畫（新影片）
-                                        trigger_frontend_animation(
-                                            video_name=f"messenger_{video_hash[:8]}",
-                                            video_hash=video_hash,
-                                            is_duplicate=False,
-                                            recognized_sentence=recognized_sentence
-                                        )
-                                        
-                                        # 發送識別結果給用戶
-                                        send_message(sender_id, recognized_sentence)
                                     else:
                                         print(f"❌ 下載影片失敗")
-                                        send_message(sender_id, "抱歉，影片下載失敗")
+                                        send_message(sender_id, "❌ 抱歉，影片下載失敗，請稍後再試。")
+                                        continue
                                 
-                                # 更新處理計數
-                                processed_count += 1
-                                save_processed_count()
-                                print(f"📊 處理計數已更新: {processed_count}")
+                                # 加入排隊系統
+                                success = add_to_queue(sender_id, file_path)
+                                
+                                if success:
+                                    # 觸發前端動畫
+                                    trigger_frontend_animation(
+                                        video_name=f"messenger_{video_hash[:8]}",
+                                        video_hash=video_hash,
+                                        is_duplicate=is_duplicate,
+                                        recognized_sentence="排隊處理中..."
+                                    )
                         else:
                             print(f"⚠️ 非影片附件，類型為: {attachment_type}")
                 
-                # 處理一般文字訊息
+                # 處理文字訊息
                 elif messaging_event.get('message', {}).get('text'):
                     message_text = messaging_event['message']['text']
                     print(f"💬 收到文字訊息: {message_text}")
-                    send_message(sender_id, "請傳送手語影片給我，我會幫您識別內容！")
+                    
+                    # 檢查是否是語言選擇
+                    detected_language = detect_language(message_text)
+                    
+                    if sender_id in user_states:
+                        user_state = user_states[sender_id]
+                        
+                        # 如果用戶在等待語言選擇狀態
+                        if user_state['status'] == 'waiting_language':
+                            if detected_language:
+                                # 設置語言
+                                set_user_language(sender_id, detected_language)
+                            else:
+                                # 無法識別的語言，提示用戶
+                                send_message(sender_id, 
+                                    "❓ 無法識別語言，請輸入明確的語言名稱\n"
+                                    "（例如：英文、日文、韓文、繁體中文等）"
+                                )
+                        elif user_state['status'] == 'queued':
+                            # 已經在排隊中，友善提示
+                            queue_position = get_queue_position(sender_id)
+                            send_message(sender_id, 
+                                f"✅ 您的影片正在排隊處理中（第 {queue_position + 1} 位）\n"
+                                f"語言已設定為：{user_state.get('language', '繁體中文')}\n"
+                                f"請耐心等候，我們會盡快完成！"
+                            )
+                        elif user_state['status'] == 'processing':
+                            # 正在處理中
+                            send_message(sender_id, 
+                                f"🎬 您的影片正在處理中，請稍候...\n"
+                                f"輸出語言：{user_state.get('language', '繁體中文')}"
+                            )
+                        else:
+                            # 其他狀態，提示上傳影片
+                            send_message(sender_id, "🎬 請傳送手語影片給我，我會幫您識別內容！")
+                    else:
+                        # 用戶不在任何狀態中，提示上傳影片
+                        send_message(sender_id, "🎬 請傳送手語影片給我，我會幫您識別內容！")
+                
                 else:
                     print(f"⚠️ 未知的訊息類型: {messaging_event}")
     else:
@@ -510,9 +852,33 @@ def webhook():
     print(f"✅ Webhook 處理完成\n")
     return 'OK', 200
 
+@app.route('/queue_status', methods=['GET'])
+def queue_status():
+    """查詢排隊系統狀態"""
+    with queue_lock:
+        queue_info = []
+        for i, (sender_id, video_path, timestamp, language) in enumerate(processing_queue):
+            queue_info.append({
+                'position': i + 1,
+                'sender_id': sender_id[:8] + '...',  # 隱私保護
+                'language': language or '繁體中文',
+                'timestamp': timestamp.isoformat(),
+                'status': user_states.get(sender_id, {}).get('status', 'unknown')
+            })
+        
+        return jsonify({
+            'queue_length': len(processing_queue),
+            'current_processing': current_processing[:8] + '...' if current_processing else None,
+            'queue': queue_info
+        }), 200
+
 @app.route('/health', methods=['GET'])
 def health():
     """健康檢查端點"""
+    with queue_lock:
+        queue_length = len(processing_queue)
+        is_processing = current_processing is not None
+    
     return jsonify({
         "status": "healthy",
         "model_status": model_loading_status['status'],
@@ -520,6 +886,8 @@ def health():
         "model_message": model_loading_status['message'],
         "downloaded_videos_count": len(DOWNLOADED_VIDEOS),
         "processed_count": processed_count,
+        "queue_length": queue_length,
+        "is_processing": is_processing,
         "data_dir": DATA_DIR,
         "verify_token_set": VERIFY_TOKEN != "your_verify_token_here",
         "page_token_set": PAGE_ACCESS_TOKEN != "your_page_access_token_here"
