@@ -272,10 +272,13 @@ class SlidingWindowInference:
     def load_and_normalize_video(self, video_path):
         """
         讀取並標準化影片
-
-        針對不足時間窗口的影片處理策略：
-        1. 如果幀數接近80幀（差距 ≤ 20幀）：線性插值補齊到80幀
-        2. 如果差距過大：加速影片到剛好80幀
+        
+        優化策略：線性插值至 80 幀的倍數
+        - 原因：確保所有窗口都是完整的 80 幀
+        - 範例：
+          • 75 幀 → 80 幀（1個窗口）
+          • 150 幀 → 160 幀（2個窗口）
+          • 200 幀 → 240 幀（3個窗口）
 
         Args:
             video_path: 影片路徑
@@ -306,73 +309,43 @@ class SlidingWindowInference:
 
         cap.release()
 
-        # 確定目標幀數策略
-        WINDOW_SIZE = 80  # 時間窗口大小
-        MAX_INTERPOLATION_GAP = 20  # 最大線性插值差距
+        if len(all_frames) == 0:
+            raise RuntimeError(f"影片無有效幀: {video_path}")
 
-        if len(all_frames) < WINDOW_SIZE:
-            # 影片太短，需要補幀
-            gap = WINDOW_SIZE - len(all_frames)
-
-            if gap <= MAX_INTERPOLATION_GAP:
-                # 差距不大：線性插值補齊到80幀
-                print(f"  🔧 影片幀數不足 ({len(all_frames)} < {WINDOW_SIZE})，使用線性插值補齊")
-                target_frame_count = WINDOW_SIZE
-                processing_method = "線性插值補齊"
+        # 計算目標幀數：線性插值至 80 幀的倍數
+        original_count = len(all_frames)
+        
+        # 計算需要多少個窗口（無條件進位）
+        num_windows = int(np.ceil(original_count / self.WINDOW_SIZE))
+        
+        # 目標幀數 = 窗口數量 × 80
+        target_frame_count = num_windows * self.WINDOW_SIZE
+        
+        print(f"  🎯 線性插值策略:")
+        print(f"     原始幀數: {original_count}")
+        print(f"     窗口數量: {num_windows} 個（每個 {self.WINDOW_SIZE} 幀）")
+        print(f"     目標幀數: {target_frame_count} 幀")
+        
+        # 線性插值重採樣
+        indices = np.linspace(0, original_count - 1, target_frame_count)
+        
+        resampled_frames = []
+        for idx in indices:
+            # 如果是整數索引，直接取幀
+            if idx == int(idx):
+                resampled_frames.append(all_frames[int(idx)])
             else:
-                # 差距過大：均勻重複幀填充到80幀
-                print(f"  🔄 影片幀數嚴重不足 ({len(all_frames)} < {WINDOW_SIZE})，均勻重複幀填充到{WINDOW_SIZE}幀")
-                target_frame_count = WINDOW_SIZE
-                processing_method = "均勻重複填充"
-        else:
-            # 影片足夠長，保持原始幀數（除非需要調整到目標FPS）
-            original_frame_count = len(all_frames)
-
-            # 檢查是否需要調整到目標FPS
-            expected_frame_count = int(duration * self.TARGET_FPS)
-            if abs(original_frame_count - expected_frame_count) / max(original_frame_count, expected_frame_count) < 0.1:
-                # FPS相近，保持原始幀數
-                target_frame_count = original_frame_count
-                processing_method = "保持原始長度"
-            else:
-                # FPS差異大，使用標準重採樣
-                target_frame_count = max(expected_frame_count, WINDOW_SIZE)
-                processing_method = "標準重採樣"
-
-        # 確保至少有WINDOW_SIZE幀
-        if target_frame_count < WINDOW_SIZE:
-            target_frame_count = WINDOW_SIZE
-
-        print(f"  🎯 處理策略: {processing_method}")
-        print(f"  📊 目標幀數: {target_frame_count} (窗口大小: {WINDOW_SIZE})")
-
-        # 根據處理策略選擇重採樣方法
-        if processing_method == "均勻重複填充":
-            # 均勻重複現有幀來填充
-            # 計算每幀需要重複的次數
-            repeat_factor = target_frame_count / len(all_frames)
-            repeated_frames = []
-
-            for i, frame in enumerate(all_frames):
-                # 計算這幀應該重複多少次
-                repeat_count = int(np.ceil((i + 1) * repeat_factor)) - int(np.ceil(i * repeat_factor))
-                repeated_frames.extend([frame] * repeat_count)
-
-            # 確保總數正確
-            if len(repeated_frames) > target_frame_count:
-                repeated_frames = repeated_frames[:target_frame_count]
-            elif len(repeated_frames) < target_frame_count:
-                # 如果還不夠，用最後一幀填充
-                last_frame = all_frames[-1]
-                repeated_frames.extend([last_frame] * (target_frame_count - len(repeated_frames)))
-
-            resampled_frames = repeated_frames
-            print(f"  🔄 均勻重複: 每幀平均重複 {repeat_factor:.1f} 次")
-        else:
-            # 線性插值重採樣（適用於其他情況）
-            indices = np.linspace(0, len(all_frames) - 1, target_frame_count).astype(int)
-            resampled_frames = [all_frames[i] for i in indices]
-
+                # 線性插值
+                lower_idx = int(np.floor(idx))
+                upper_idx = int(np.ceil(idx))
+                weight = idx - lower_idx
+                
+                # 混合兩幀
+                lower_frame = all_frames[lower_idx].astype(np.float32)
+                upper_frame = all_frames[upper_idx].astype(np.float32)
+                interpolated = (1 - weight) * lower_frame + weight * upper_frame
+                resampled_frames.append(interpolated.astype(np.uint8))
+        
         # Resize 並轉換為 RGB
         normalized_frames = []
         for frame in resampled_frames:
@@ -381,11 +354,11 @@ class SlidingWindowInference:
             normalized_frames.append(frame_rgb)
 
         # 計算最終的等效FPS
-        final_duration = len(normalized_frames) / self.TARGET_FPS if hasattr(self, 'TARGET_FPS') else duration
+        final_duration = len(normalized_frames) / self.TARGET_FPS
         effective_fps = len(normalized_frames) / final_duration if final_duration > 0 else original_fps
 
         print(f"  ✅ 處理完成: {len(normalized_frames)} 幀 @ {effective_fps:.2f} fps")
-        print(f"  📈 幀數變化: {total_frames} → {len(normalized_frames)} (+{len(normalized_frames) - total_frames})")
+        print(f"  📈 幀數變化: {total_frames} → {len(normalized_frames)} ({len(normalized_frames) - total_frames:+d})")
 
         return normalized_frames
     

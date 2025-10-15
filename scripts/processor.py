@@ -147,14 +147,15 @@ class VideoProcessor:
     
     功能：
     1. 智能人體檢測和裁切（MediaPipe Pose）
-    2. 影片標準化（幀數、FPS、解析度）
+    2. 影片標準化（FPS、解析度）
     3. 影片編碼優化（h.264）
     
-    注意：不包含數據增強功能！數據增強請使用 DataAugmentor
+    注意：
+    - 不包含數據增強功能！數據增強請使用 DataAugmentor
+    - 不強制幀數標準化！由呼叫者決定目標幀數
     """
     
     # 標準化參數
-    TARGET_FRAMES = 80      # 目標幀數
     TARGET_FPS = 30         # 目標幀率
     TARGET_WIDTH = 224      # 目標寬度
     TARGET_HEIGHT = 224     # 目標高度
@@ -165,18 +166,22 @@ class VideoProcessor:
     CROP_PADDING = 0.15     # 邊界框擴展比例（15%）
     MIN_DETECTION_CONFIDENCE = 0.5  # 最低檢測信心度
     
-    def __init__(self, enable_cropping=True):
+    def __init__(self, enable_cropping=True, target_frames=None):
         """
         初始化影片處理器
         
         Args:
             enable_cropping: 是否啟用智能人體裁切（預設開啟）
+            target_frames: 目標幀數（None=不強制標準化，由呼叫者決定）
         """
         # 檢查是否有ffmpeg（用於後處理確保h264編碼）
         self.has_ffmpeg = self._check_ffmpeg()
         
         # 是否啟用智能裁切
         self.enable_cropping = enable_cropping
+        
+        # 目標幀數（訓練時使用，辨識時由 SlidingWindowInference 決定）
+        self.target_frames = target_frames
         
         # 初始化 MediaPipe Pose（延遲初始化）
         self.mp_pose = None
@@ -455,9 +460,9 @@ class VideoProcessor:
             verify_frames = int(verify_cap.get(cv2.CAP_PROP_FRAME_COUNT))
             verify_cap.release()
 
-            # 檢查是否符合規格（允許1幀的誤差）
-            if abs(verify_frames - self.TARGET_FRAMES) > 1:
-                print(f"⚠️  警告: {os.path.basename(output_path)} 幀數不符 (期望{self.TARGET_FRAMES}, 實際{verify_frames})")
+            # 檢查是否符合規格（允許1幀的誤差，如果有設定目標幀數）
+            if self.target_frames is not None and abs(verify_frames - self.target_frames) > 1:
+                print(f"⚠️  警告: {os.path.basename(output_path)} 幀數不符 (期望{self.target_frames}, 實際{verify_frames})")
 
             return True
 
@@ -465,12 +470,12 @@ class VideoProcessor:
             print(f"❌ 保存影片時出錯: {output_path}, 錯誤: {str(e)}")
             return False
 
-    def process_video(self, input_path, output_path, augmentor=None):
+    def process_video(self, input_path, output_path, augmentor=None, target_frames=None):
         """
         處理單一影片：標準化 + 可選的數據增強
         
         核心處理流程：
-        1. 幀數標準化（80幀）
+        1. 幀數標準化（可選，如果提供 target_frames）
         2. 智能裁切人體（可選）
         3. 解析度標準化（224x224）
         4. 數據增強（可選，需要提供 augmentor）
@@ -485,6 +490,7 @@ class VideoProcessor:
             input_path: 輸入影片路徑
             output_path: 輸出影片路徑
             augmentor: DataAugmentor 實例（可選，訓練時使用）
+            target_frames: 目標幀數（可選，覆蓋 __init__ 設定）
         
         Returns:
             處理是否成功
@@ -517,8 +523,13 @@ class VideoProcessor:
                 print(f"❌ 影片無有效幀: {input_path}")
                 return False
 
-            # 步驟1: 幀數標準化
-            normalized_frames = self.normalize_frames(original_frames, self.TARGET_FRAMES)
+            # 步驟1: 幀數標準化（可選）
+            target = target_frames if target_frames is not None else self.target_frames
+            if target is not None:
+                normalized_frames = self.normalize_frames(original_frames, target)
+            else:
+                # 不進行幀數標準化
+                normalized_frames = original_frames
 
             # 步驟2: 智能裁切人體（在 resize 之前）
             cropped_frames = []
@@ -596,7 +607,10 @@ class VideoProcessor:
         if self.enable_cropping:
             print(f"      └─ 自動檢測最前面的人（上半身 + 完整手臂）")
             print(f"      └─ Padding: {self.CROP_PADDING * 100:.0f}%")
-        print(f"   - 幀數: {self.TARGET_FRAMES} 幀")
+        if self.target_frames is not None:
+            print(f"   - 幀數: {self.target_frames} 幀")
+        else:
+            print(f"   - 幀數: 保持原始長度（由呼叫者決定）")
         print(f"   - FPS: {self.TARGET_FPS} fps")
         print(f"   - 解析度: {self.TARGET_WIDTH}x{self.TARGET_HEIGHT}")
         if self.has_ffmpeg:
@@ -684,8 +698,8 @@ def main():
     print(f"📂 輸出目錄: {output_dir}")
     print()
     
-    # 初始化處理器（啟用智能裁切）
-    processor = VideoProcessor(enable_cropping=True)
+    # 初始化處理器（啟用智能裁切 + 80幀標準化）
+    processor = VideoProcessor(enable_cropping=True, target_frames=80)
     
     # 初始化數據增強器（訓練時使用）
     augmentor = DataAugmentor()
@@ -723,13 +737,13 @@ def main():
     print("=" * 70)
 
 
-def process_for_inference(input_video, output_video, enable_cropping=True):
+def process_for_inference(input_video, output_video, enable_cropping=True, target_frames=None):
     """
     辨識前處理 - 僅標準化（不含數據增強）
     
     用於辨識時的影片前處理：
     1. 智能裁切人體（可選）
-    2. 幀數標準化（80幀）
+    2. 幀數標準化（可選）
     3. 解析度標準化（224x224）
     
     不包含數據增強！僅輸出單個標準化版本
@@ -738,6 +752,7 @@ def process_for_inference(input_video, output_video, enable_cropping=True):
         input_video: 輸入影片路徑
         output_video: 輸出影片路徑
         enable_cropping: 是否啟用智能裁切（預設開啟）
+        target_frames: 目標幀數（None=不強制標準化）
     
     Returns:
         處理是否成功
@@ -751,10 +766,10 @@ def process_for_inference(input_video, output_video, enable_cropping=True):
     print("=" * 70)
     
     # 初始化處理器（不使用數據增強）
-    processor = VideoProcessor(enable_cropping=enable_cropping)
+    processor = VideoProcessor(enable_cropping=enable_cropping, target_frames=target_frames)
     
     # 處理影片（augmentor=None，只輸出標準化版本）
-    success = processor.process_video(input_video, output_video, augmentor=None)
+    success = processor.process_video(input_video, output_video, augmentor=None, target_frames=target_frames)
     
     if success:
         print(f"✅ 處理完成: {output_video}")
