@@ -55,10 +55,14 @@ class EnhancedSkeletonExtractor:
         # 檢測系統和可用資源
         self._detect_system_resources(num_threads)
 
-        # 初始化 MediaPipe Holistic (自動使用 Metal 加速)
+        # 初始化 MediaPipe Holistic (強制使用 CPU)
         print("📥 載入 MediaPipe Holistic 模型...")
-        print(f"   模式: {'M1 Metal (自動加速)' if self.mps_available else 'CPU'}")
+        print("   模式: CPU (強制)")
         print(f"   線程數: {self.num_threads}")
+
+        # 強制使用 CPU (禁用 GPU/Metal 加速)
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''  # 禁用 CUDA GPU
+        os.environ['MEDIAPIPE_GPU_DISABLED'] = '1'  # 禁用 MediaPipe GPU
 
         self.mp_holistic = mp.solutions.holistic
         self.holistic = self.mp_holistic.Holistic(
@@ -86,21 +90,16 @@ class EnhancedSkeletonExtractor:
         self.cpu_count = psutil.cpu_count(logical=True)
         self.physical_cpu_count = psutil.cpu_count(logical=False)
 
-        # 設置線程數
+        # 設置線程數 (強制CPU模式)
         if num_threads is None:
-            # 避免過度使用 CPU，留一些核心給系統
-            if self.mps_available:
-                # M1 芯片使用較少線程（Metal 會自動加速）
-                self.num_threads = min(4, self.physical_cpu_count)
-            else:
-                # 傳統 CPU 使用更多線程但留核心給系統
-                self.num_threads = max(1, self.physical_cpu_count - 1)
+            # CPU模式：使用更多線程但留核心給系統
+            self.num_threads = max(1, self.physical_cpu_count - 1)
         else:
             self.num_threads = num_threads
 
         print(f"🔍 系統資源檢測:")
         print(f"   - CPU 核心: {self.cpu_count} (物理: {self.physical_cpu_count})")
-        print(f"   - M1 MPS Metal: {'可用' if self.mps_available else '不可用'}")
+        print(f"   - 模式: CPU (強制)")
         print(f"   - 優化線程數: {self.num_threads}")
 
         # 設置 OpenMP 線程數（影響 MediaPipe）
@@ -346,7 +345,7 @@ class EnhancedSkeletonExtractor:
             },
             "cpu_optimization": {
                 "num_threads": self.num_threads,
-                "mps_available": self.mps_available,
+                "mode": "CPU (強制)",
                 "cpu_cores": self.cpu_count
             }
         }
