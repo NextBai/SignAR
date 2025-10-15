@@ -27,6 +27,7 @@ import numpy as np
 # 添加專案路徑到 sys.path
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent / "feature_extraction"))
+sys.path.append(str(Path(__file__).parent / "scripts"))
 
 # 設置 Keras backend
 os.environ['KERAS_BACKEND'] = 'tensorflow'
@@ -79,6 +80,18 @@ import queue
 import asyncio
 from collections import deque
 from datetime import datetime, timedelta
+import tempfile
+
+# ==================== 影片預處理模組 ====================
+try:
+    from scripts.processor import VideoProcessor
+    VIDEO_PREPROCESSOR = None  # 延遲初始化
+    PREPROCESSOR_ENABLED = True
+    print("✅ VideoProcessor 模組載入成功")
+except ImportError as e:
+    print(f"⚠️ VideoProcessor 模組載入失敗: {e}")
+    print("⚠️ 將使用原始影片處理流程（無智能裁切）")
+    PREPROCESSOR_ENABLED = False
 
 # 處理隊列
 processing_queue = deque()  # [(sender_id, video_path, timestamp, language), ...]
@@ -257,29 +270,103 @@ def process_next_in_queue():
                 thread.start()
                 break
 
+def preprocess_video_async(video_path):
+    """
+    異步預處理影片（智能裁切 + 標準化）
+    
+    Args:
+        video_path: 原始影片路徑
+    
+    Returns:
+        preprocessed_path: 預處理後的影片路徑（臨時文件）
+        success: 是否成功
+    """
+    global VIDEO_PREPROCESSOR
+    
+    if not PREPROCESSOR_ENABLED:
+        # 如果預處理器未啟用，返回原始影片
+        return video_path, True
+    
+    try:
+        # 延遲初始化 VideoProcessor（避免啟動時開銷）
+        if VIDEO_PREPROCESSOR is None:
+            print("🔧 初始化 VideoProcessor（首次使用）...")
+            VIDEO_PREPROCESSOR = VideoProcessor(enable_cropping=True)
+            print("✅ VideoProcessor 初始化完成")
+        
+        # 創建臨時文件存儲預處理後的影片
+        temp_file = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+        preprocessed_path = temp_file.name
+        temp_file.close()
+        
+        print(f"📹 開始預處理影片: {Path(video_path).name}")
+        print(f"  - 智能裁切: 啟用（聚焦簽名者）")
+        print(f"  - 標準化: 80幀 @ 30fps, 224x224")
+        
+        # 執行預處理（augmentor=None，僅標準化）
+        success = VIDEO_PREPROCESSOR.process_video(
+            input_path=video_path,
+            output_path=preprocessed_path,
+            augmentor=None  # 辨識時不使用數據增強
+        )
+        
+        if success:
+            print(f"✅ 預處理完成: {Path(preprocessed_path).name}")
+            return preprocessed_path, True
+        else:
+            print(f"⚠️ 預處理失敗，使用原始影片")
+            # 清理失敗的臨時文件
+            if os.path.exists(preprocessed_path):
+                os.remove(preprocessed_path)
+            return video_path, False
+            
+    except Exception as e:
+        print(f"❌ 預處理異常: {e}")
+        import traceback
+        traceback.print_exc()
+        return video_path, False
+
 def process_video_task(sender_id, video_path, target_language):
     """
     處理影片任務（在獨立線程中執行）
     
+    完整流程：
+    1. 影片預處理（智能裁切 + 標準化）
+    2. 手語識別（滑動窗口 + OpenAI）
+    3. 語言轉換
+    4. 清理臨時文件
+    
     Args:
         sender_id: 用戶ID
-        video_path: 影片路徑
+        video_path: 原始影片路徑
         target_language: 目標語言
     """
     global current_processing, processed_count
+    
+    preprocessed_path = None
     
     try:
         print(f"🎬 處理用戶 {sender_id} 的影片: {video_path}")
         print(f"🌐 目標語言: {target_language}")
         
-        # 處理影片並獲取識別結果
+        # ==================== 步驟 1: 影片預處理 ====================
+        preprocessed_path, preprocess_success = preprocess_video_async(video_path)
+        
+        if preprocess_success and preprocessed_path != video_path:
+            print(f"✅ 使用預處理後的影片進行識別")
+            video_to_process = preprocessed_path
+        else:
+            print(f"⚠️ 使用原始影片進行識別（預處理失敗或未啟用）")
+            video_to_process = video_path
+        
+        # ==================== 步驟 2: 手語識別 ====================
         recognized_sentence = process_video_and_get_sentence_with_language(
-            video_path, 
+            video_to_process, 
             socketio, 
             target_language
         )
         
-        # 發送結果給用戶
+        # ==================== 步驟 3: 發送結果 ====================
         send_message(sender_id, f"✅ 識別完成！\n\n📝 結果：{recognized_sentence}")
         
         # 更新計數
@@ -295,6 +382,15 @@ def process_video_task(sender_id, video_path, target_language):
         send_message(sender_id, "❌ 抱歉，影片處理失敗，請稍後再試。")
     
     finally:
+        # ==================== 步驟 4: 清理臨時文件 ====================
+        if preprocessed_path and preprocessed_path != video_path:
+            try:
+                if os.path.exists(preprocessed_path):
+                    os.remove(preprocessed_path)
+                    print(f"🧹 已清理預處理臨時文件: {Path(preprocessed_path).name}")
+            except Exception as e:
+                print(f"⚠️ 清理臨時文件失敗: {e}")
+        
         # 清理用戶狀態
         with queue_lock:
             if sender_id in user_states:
