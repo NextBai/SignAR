@@ -72,8 +72,7 @@ class EnhancedSkeletonExtractor:
             enable_segmentation=False,
             smooth_segmentation=False,
             min_detection_confidence=0.5,  # 保持高品質檢測
-            min_tracking_confidence=0.5,
-            use_gpu=False  # 這裡關掉 GPU
+            min_tracking_confidence=0.5
         )
 
         print("✅ 模型載入完成")

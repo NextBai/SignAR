@@ -580,7 +580,10 @@ class SlidingWindowInference:
         print("=" * 70)
         print(f"總耗時: {total_time:.2f}s")
         print(f"處理窗口數: {len(all_results)}/{num_windows}")
-        print(f"平均每窗口: {total_time/len(all_results):.2f}s")
+        if len(all_results) > 0:
+            print(f"平均每窗口: {total_time/len(all_results):.2f}s")
+        else:
+            print("平均每窗口: N/A (無成功處理窗口)")
         
         # 5. 保存結果
         if save_results:
