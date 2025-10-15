@@ -41,6 +41,8 @@ os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'
 os.environ['MEDIAPIPE_DISABLE_EGL'] = '1'
 os.environ['EGL_PLATFORM'] = 'surfaceless'
 os.environ['GLOG_logtostderr'] = '1'
+# 抑制 MediaPipe GPU 試探的錯誤訊息（2=只顯示 ERROR 以上）
+os.environ['GLOG_minloglevel'] = '2'
 
 # 設置 Keras backend 為 TensorFlow
 os.environ['KERAS_BACKEND'] = 'tensorflow'

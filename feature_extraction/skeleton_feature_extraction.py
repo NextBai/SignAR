@@ -8,7 +8,18 @@
 - 多進程 + 多線程 CPU 優化
 """
 
+# 🚫 關鍵：必須在 import mediapipe 之前就設定環境變數！
+# MediaPipe C++ 底層會在 import 時就嘗試初始化 GPU，此時設定才有效
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['MEDIAPIPE_GPU_DISABLED'] = '1'
+os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'
+os.environ['MEDIAPIPE_DISABLE_EGL'] = '1'
+os.environ['EGL_PLATFORM'] = 'surfaceless'
+os.environ['GLOG_logtostderr'] = '1'
+# 抑制 MediaPipe 的 GPU 試探錯誤訊息（0=INFO, 1=WARNING, 2=ERROR, 3=FATAL）
+os.environ['GLOG_minloglevel'] = '2'
+
 import cv2
 import numpy as np
 from pathlib import Path
@@ -22,7 +33,7 @@ import threading
 import psutil
 
 try:
-    import mediapipe as mp
+    import mediapipe as mp_solutions
 except ImportError as e:
     raise ImportError("❌ 請安裝 mediapipe: pip install mediapipe") from e
 
@@ -60,15 +71,8 @@ class EnhancedSkeletonExtractor:
         print("   模式: CPU (強制)")
         print(f"   線程數: {self.num_threads}")
 
-        # 🚫 強制使用 CPU (禁用 GPU/Metal/EGL 加速)
-        os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-        os.environ['MEDIAPIPE_GPU_DISABLED'] = '1'
-        os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'
-        os.environ['MEDIAPIPE_DISABLE_EGL'] = '1'
-        os.environ['EGL_PLATFORM'] = 'surfaceless'
-        os.environ['GLOG_logtostderr'] = '1'
-
-        self.mp_holistic = mp.solutions.holistic
+        # 環境變數已在檔案開頭設定，這裡直接初始化
+        self.mp_holistic = mp_solutions.solutions.holistic
         self.holistic = self.mp_holistic.Holistic(
             static_image_mode=False,
             model_complexity=1,  # 保持 Full 版本以維持特徵品質

@@ -6,6 +6,8 @@ os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'
 os.environ['MEDIAPIPE_DISABLE_EGL'] = '1'
 os.environ['EGL_PLATFORM'] = 'surfaceless'
 os.environ['GLOG_logtostderr'] = '1'
+# 抑制 MediaPipe GPU 試探的錯誤訊息（2=只顯示 ERROR 以上）
+os.environ['GLOG_minloglevel'] = '2'
 
 import eventlet
 eventlet.monkey_patch()
@@ -64,6 +66,13 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
 
 # 手語識別器全局變量
 sign_language_recognizer = None
+model_loading_status = {
+    'status': 'not_started',  # not_started, loading, ready, failed
+    'progress': 0,
+    'message': '模型尚未載入',
+    'error': None
+}
+model_loading_lock = threading.Lock()
 
 # 初始化
 def init_storage():
@@ -89,39 +98,71 @@ def init_storage():
             except json.JSONDecodeError:
                 processed_count = 0
 
+def load_model_async():
+    """異步載入模型（背景執行）"""
+    global sign_language_recognizer, model_loading_status
+    
+    with model_loading_lock:
+        if model_loading_status['status'] == 'loading':
+            return  # 已經在載入中，避免重複
+        model_loading_status['status'] = 'loading'
+        model_loading_status['message'] = '開始載入模型...'
+        model_loading_status['progress'] = 0
+    
+    try:
+        from sliding_window_inference import SlidingWindowInference
+        
+        model_path = Path(__file__).parent / 'model_output' / 'best_model_mps.keras'
+        label_path = Path(__file__).parent / 'model_output' / 'label_map.json'
+        
+        if not model_path.exists():
+            raise FileNotFoundError(f"模型文件不存在: {model_path}")
+        
+        if not label_path.exists():
+            raise FileNotFoundError(f"標籤文件不存在: {label_path}")
+        
+        print("🔧 背景載入手語識別器...")
+        
+        # 更新進度
+        with model_loading_lock:
+            model_loading_status['message'] = '載入 Keras 模型...'
+            model_loading_status['progress'] = 20
+        
+        sign_language_recognizer = SlidingWindowInference(
+            model_path=str(model_path),
+            label_map_path=str(label_path),
+            device='cpu',
+            stride=80,
+            openai_api_key=OPENAI_API_KEY
+        )
+        
+        # 完成
+        with model_loading_lock:
+            model_loading_status['status'] = 'ready'
+            model_loading_status['message'] = '模型載入完成'
+            model_loading_status['progress'] = 100
+        
+        print("✅ 手語識別器初始化成功（背景載入）")
+        
+    except Exception as e:
+        error_msg = f"模型載入失敗: {e}"
+        print(f"❌ {error_msg}")
+        import traceback
+        traceback.print_exc()
+        
+        with model_loading_lock:
+            model_loading_status['status'] = 'failed'
+            model_loading_status['message'] = error_msg
+            model_loading_status['error'] = str(e)
+
 def get_sign_language_recognizer():
-    """獲取手語識別器（延遲載入）"""
+    """獲取手語識別器（檢查載入狀態）"""
     global sign_language_recognizer
     
-    if sign_language_recognizer is None:
-        try:
-            from sliding_window_inference import SlidingWindowInference
-            
-            model_path = Path(__file__).parent / 'model_output' / 'best_model_mps.keras'
-            label_path = Path(__file__).parent / 'model_output' / 'label_map.json'
-            
-            if not model_path.exists():
-                print(f"⚠️ 模型文件不存在: {model_path}")
-                return None
-            
-            if not label_path.exists():
-                print(f"⚠️ 標籤文件不存在: {label_path}")
-                return None
-            
-            print("🔧 正在初始化手語識別器...")
-            sign_language_recognizer = SlidingWindowInference(
-                model_path=str(model_path),
-                label_map_path=str(label_path),
-                device='cpu',
-                stride=80,
-                openai_api_key=OPENAI_API_KEY
-            )
-            print("✅ 手語識別器初始化成功")
-        except Exception as e:
-            print(f"❌ 手語識別器初始化失敗: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+    # 如果還沒開始載入，啟動背景載入
+    if model_loading_status['status'] == 'not_started':
+        thread = threading.Thread(target=load_model_async, daemon=True)
+        thread.start()
     
     return sign_language_recognizer
 
@@ -196,11 +237,20 @@ def process_video_and_get_sentence(video_path, socketio_instance=None):
     try:
         print(f"🎬 開始處理影片: {video_path}")
         
-        # 獲取全局識別器（延遲載入）
+        # 獲取全局識別器（檢查載入狀態）
         recognizer = get_sign_language_recognizer()
-        if recognizer is None:
-            print("⚠️ 手語識別器未初始化，返回預設訊息")
-            return "Hello World! (識別器未啟用)"
+        
+        # 檢查模型載入狀態
+        if model_loading_status['status'] == 'loading':
+            message = f"模型載入中...({model_loading_status['progress']}%)"
+            print(f"⏳ {message}")
+            return message
+        elif model_loading_status['status'] == 'failed':
+            print(f"❌ 模型載入失敗: {model_loading_status['error']}")
+            return f"模型載入失敗: {model_loading_status['message']}"
+        elif recognizer is None:
+            print("⚠️ 手語識別器未就緒")
+            return "手語識別器未就緒，請稍後再試"
         
         # 創建進度回調函數
         def progress_callback(current, total, message):
@@ -465,6 +515,9 @@ def health():
     """健康檢查端點"""
     return jsonify({
         "status": "healthy",
+        "model_status": model_loading_status['status'],
+        "model_progress": model_loading_status['progress'],
+        "model_message": model_loading_status['message'],
         "downloaded_videos_count": len(DOWNLOADED_VIDEOS),
         "processed_count": processed_count,
         "data_dir": DATA_DIR,
@@ -529,15 +582,12 @@ if __name__ == '__main__':
     # 初始化儲存
     init_storage()
     
-    # 注意：模型將在首次請求時延遲載入，以節省啟動記憶體
-    
     print(f"📁 資料目錄: {DATA_DIR}")
     print(f"📄 已下載影片記錄檔: {DOWNLOADED_VIDEOS_FILE}")
     print(f"📊 處理計數檔: {PROCESSED_COUNT_FILE}")
     print(f"💾 影片儲存路徑: {VIDEO_STORAGE_PATH}")
     print(f"🔢 已處理影片數: {processed_count}")
     print(f"🎬 已記錄影片數: {len(DOWNLOADED_VIDEOS)}")
-    print(f"🤖 手語識別器: ⏳ 延遲載入（首次請求時初始化）")
     print(f"🔑 Messenger Verify Token: {'✅ 已設定' if VERIFY_TOKEN != 'your_verify_token_here' else '⚠️ 未設定'}")
     print(f"🔐 Page Access Token: {'✅ 已設定' if PAGE_ACCESS_TOKEN != 'your_page_access_token_here' else '⚠️ 未設定'}")
     print(f"🔐 OpenAI API Key: {'✅ 已設定' if OPENAI_API_KEY else '⚠️ 未設定'}")
@@ -546,9 +596,13 @@ if __name__ == '__main__':
     print(f"🌐 啟動 WebSocket 服務於 0.0.0.0:{port}")
     print(f"🔧 使用 async_mode: eventlet")
     print("="*60)
-    print("✅ 系統就緒，等待請求...")
-    print("💡 記憶體優化：模型將在首次處理影片時載入")
+    print("✅ 系統就緒！")
+    print("🚀 啟動背景異步載入模型...")
     print("="*60 + "\n")
+    
+    # 🚀 啟動背景異步載入模型（不阻塞 Flask 啟動）
+    model_thread = threading.Thread(target=load_model_async, daemon=True)
+    model_thread.start()
 
     # 使用 SocketIO 來運行應用（eventlet 模式）
     socketio.run(app, host='0.0.0.0', port=port, debug=False)

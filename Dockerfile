@@ -42,6 +42,8 @@ ENV GLOG_logtostderr=1
 # 禁用 EGL（OpenGL 的 headless 渲染）
 ENV MEDIAPIPE_DISABLE_EGL=1
 ENV EGL_PLATFORM=surfaceless
+# 抑制 MediaPipe GPU 試探的錯誤訊息（0=INFO, 1=WARNING, 2=ERROR, 3=FATAL）
+ENV GLOG_minloglevel=2
 
 # Render 會動態設定 PORT，預設 10000
 ENV PORT=10000
