@@ -60,10 +60,16 @@ class EnhancedSkeletonExtractor:
         print("   模式: CPU (強制)")
         print(f"   線程數: {self.num_threads}")
 
-        # 強制使用 CPU (禁用 GPU/Metal 加速)
+        # 強制使用 CPU (禁用所有 GPU/OpenGL 加速)
+        # 這些環境變數必須在導入 mediapipe 之前設置，但為了容器環境額外確保
         os.environ['CUDA_VISIBLE_DEVICES'] = ''  # 禁用 CUDA GPU
         os.environ['MEDIAPIPE_GPU_DISABLED'] = '1'  # 禁用 MediaPipe GPU
-
+        os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # 替代環境變數
+        
+        # 禁用 OpenGL/EGL (關鍵！Zeabur 容器無 GPU 支援)
+        os.environ['GLOG_minloglevel'] = '2'  # 減少錯誤日誌
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 減少 TensorFlow 日誌
+        
         self.mp_holistic = mp.solutions.holistic
         self.holistic = self.mp_holistic.Holistic(
             static_image_mode=False,

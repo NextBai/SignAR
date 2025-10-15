@@ -3,6 +3,17 @@ eventlet.monkey_patch()
 
 import os
 import sys
+
+# ⚠️ 關鍵！在導入任何其他模組前先設置環境變數
+# 禁用 MediaPipe GPU/OpenGL（Zeabur 容器無 GPU 支援）
+os.environ['CUDA_VISIBLE_DEVICES'] = ''  # 禁用 CUDA
+os.environ['MEDIAPIPE_GPU_DISABLED'] = '1'  # 禁用 MediaPipe GPU
+os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # 替代變數
+os.environ['GLOG_minloglevel'] = '2'  # 減少 Google Log 日誌
+os.environ['KERAS_BACKEND'] = 'tensorflow'  # 設置 Keras backend
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 減少 TensorFlow 日誌
+
+# 現在才導入其他模組
 import json
 import hashlib
 import requests
@@ -17,10 +28,6 @@ import numpy as np
 # 添加專案路徑到 sys.path
 sys.path.append(str(Path(__file__).parent))
 sys.path.append(str(Path(__file__).parent / "feature_extraction"))
-
-# 設置 Keras backend
-os.environ['KERAS_BACKEND'] = 'tensorflow'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # 強制標準輸出和錯誤輸出無緩衝，確保日誌即時顯示
 sys.stdout.reconfigure(line_buffering=True)

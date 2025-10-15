@@ -34,6 +34,17 @@
 
 import os
 import sys
+
+# ⚠️ 關鍵！在導入任何其他模組前先設置環境變數
+# 禁用 MediaPipe GPU/OpenGL（容器環境無 GPU 支援）
+os.environ['CUDA_VISIBLE_DEVICES'] = ''  # 禁用 CUDA
+os.environ['MEDIAPIPE_GPU_DISABLED'] = '1'  # 禁用 MediaPipe GPU
+os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # 替代變數
+os.environ['GLOG_minloglevel'] = '2'  # 減少 Google Log 日誌
+os.environ['KERAS_BACKEND'] = 'tensorflow'  # 設置 Keras backend
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 減少 TensorFlow 日誌
+
+# 現在才導入其他模組
 import cv2
 import numpy as np
 import torch
@@ -42,10 +53,6 @@ from datetime import datetime
 import json
 import time
 from openai import OpenAI
-
-# 設置 Keras backend 為 TensorFlow
-os.environ['KERAS_BACKEND'] = 'tensorflow'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import tensorflow as tf
 import keras
