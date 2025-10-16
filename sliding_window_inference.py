@@ -616,10 +616,18 @@ class SlidingWindowInference:
         print(f"🤖 使用 OpenAI 分析並重組句子（目標語言: {target_language}）...")
         print("=" * 70)
         
+        # 發送 GPT 重組開始進度
+        if self.progress_callback:
+            self.progress_callback(0, 100, f"OpenAI 句子重組中 - 目標語言: {target_language}")
+        
         # 準備提示詞
         prompt = self._build_openai_prompt(results, target_language)
         print(f"🔍 調試: 提示詞長度: {len(prompt)} 字符")
         print(f"🔍 調試: 窗口數量: {len(results)}")
+        
+        # 發送提示詞準備完成進度
+        if self.progress_callback:
+            self.progress_callback(30, 100, "提示詞準備完成 - 調用 GPT API")
         
         try:
             # 使用 OpenAI Chat Completions API（GPT-4o-mini）
@@ -648,11 +656,19 @@ class SlidingWindowInference:
                 max_tokens=1000  # GPT-4o-mini 使用 max_tokens
             )
             
+            # 發送 API 調用完成進度
+            if self.progress_callback:
+                self.progress_callback(70, 100, "GPT API 回應成功 - 解析結果")
+            
             # 解析 Chat Completions API 的回應
             ai_response = response.choices[0].message.content
             
             # 嘗試從回應中提取句子和解釋
             composed_sentence, explanation = self._parse_openai_response(ai_response)
+            
+            # 發送完成進度
+            if self.progress_callback:
+                self.progress_callback(100, 100, "句子重組完成")
             
             print(f"\n✅ AI 分析完成")
             print(f"🎯 重組句子: {composed_sentence}")

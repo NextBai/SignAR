@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>影片處理生產線 🏭</title>
+    <title>🤟 手語識別系統 - Sign & Sight</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
         * {
@@ -12,608 +12,860 @@
             box-sizing: border-box;
         }
 
-        body {
-            font-family: 'Arial', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 20px;
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5568d3;
+            --success: #48bb78;
+            --warning: #f6ad55;
+            --error: #f56565;
+            --bg-main: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --border-color: #334155;
+            --shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
 
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-main);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 20px;
+            background-image: 
+                radial-gradient(circle at 20% 50%, rgba(102, 126, 234, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(72, 187, 120, 0.1) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Header */
         .header {
             text-align: center;
-            color: white;
             margin-bottom: 40px;
+            animation: fadeInDown 0.6s ease-out;
         }
 
         .header h1 {
             font-size: 2.5em;
+            background: linear-gradient(135deg, var(--primary), var(--success));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
             margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
         }
 
-        .production-line {
-            background: white;
+        .header p {
+            color: var(--text-secondary);
+            font-size: 1.1em;
+        }
+
+        /* Main Layout */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        /* Video Section */
+        .video-section {
+            background: var(--bg-card);
             border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 1000px;
-            width: 100%;
+            padding: 30px;
+            border: 1px solid var(--border-color);
+            animation: fadeInLeft 0.6s ease-out;
         }
 
-        .assembly-line {
+        .video-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            position: relative;
-            min-height: 300px;
+            margin-bottom: 20px;
         }
 
-        /* 影片展示區 */
-        .video-display-zone {
-            flex: 1;
+        .video-header h2 {
             display: flex;
-            flex-direction: column;
             align-items: center;
-            padding: 20px;
-            background: #f0f4ff;
-            border-radius: 15px;
-            border: 3px solid #667eea;
-            transition: all 0.3s;
-            position: relative;
+            gap: 10px;
+            font-size: 1.5em;
         }
 
-        .video-icon {
-            font-size: 4em;
-            margin-bottom: 10px;
-        }
-
-        .video-display-zone h3 {
-            color: #667eea;
-            margin-bottom: 10px;
-        }
-
-        .video-display-zone p {
-            color: #666;
+        .language-badge {
+            background: var(--primary);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
             font-size: 0.9em;
+            font-weight: 500;
         }
 
-        /* 傳送帶 */
-        .conveyor-belt {
-            flex: 2;
+        .video-container {
             position: relative;
-            height: 100px;
-            margin: 0 30px;
-        }
-
-        .belt {
-            width: 100%;
-            height: 60px;
-            background: linear-gradient(to right, #444 0%, #555 50%, #444 100%);
-            border-radius: 10px;
-            position: relative;
+            background: #000;
+            border-radius: 15px;
             overflow: hidden;
-            box-shadow: inset 0 5px 15px rgba(0,0,0,0.5);
-        }
-
-        .belt-stripes {
-            position: absolute;
-            width: 200%;
-            height: 100%;
-            background: repeating-linear-gradient(
-                90deg,
-                transparent,
-                transparent 40px,
-                rgba(255,255,255,0.1) 40px,
-                rgba(255,255,255,0.1) 60px
-            );
-            animation: belt-move 2s linear infinite;
-            animation-play-state: paused;
-        }
-
-        .belt-stripes.moving {
-            animation-play-state: running;
-        }
-
-        @keyframes belt-move {
-            0% { transform: translateX(0); }
-            100% { transform: translateX(-60px); }
-        }
-
-        /* 影片在傳送帶上 */
-        .video-package {
-            position: absolute;
-            top: 10px;
-            left: -100px;
-            width: 80px;
-            height: 60px;
-            background: #ff6b6b;
-            border-radius: 5px;
+            aspect-ratio: 16/9;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 2em;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-            opacity: 0;
-            transition: opacity 0.3s;
         }
 
-        .video-package.moving {
-            animation: package-move 4s linear forwards;
+        .video-placeholder {
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .video-placeholder .icon {
+            font-size: 4em;
+            margin-bottom: 10px;
+            opacity: 0.5;
+        }
+
+        #mainVideo {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .video-info {
+            margin-top: 15px;
+            padding: 15px;
+            background: var(--bg-main);
+            border-radius: 10px;
+            font-size: 0.9em;
+            color: var(--text-secondary);
+        }
+
+        /* Process Flow Section */
+        .process-section {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 30px;
+            border: 1px solid var(--border-color);
+            animation: fadeInRight 0.6s ease-out;
+        }
+
+        .process-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 25px;
+        }
+
+        .process-header h2 {
+            font-size: 1.5em;
+        }
+
+        .process-timeline {
+            position: relative;
+        }
+
+        .timeline-line {
+            position: absolute;
+            left: 20px;
+            top: 30px;
+            bottom: 30px;
+            width: 3px;
+            background: var(--border-color);
+        }
+
+        .timeline-progress {
+            position: absolute;
+            left: 20px;
+            top: 30px;
+            width: 3px;
+            height: 0%;
+            background: linear-gradient(180deg, var(--primary), var(--success));
+            transition: height 0.5s ease;
+        }
+
+        .process-step {
+            position: relative;
+            padding-left: 60px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+            transition: all 0.3s ease;
+        }
+
+        .process-step.active {
             opacity: 1;
         }
 
-        @keyframes package-move {
-            0% { left: -100px; }
-            100% { left: calc(100% + 20px); }
+        .process-step.completed {
+            opacity: 0.8;
         }
 
-        /* 輸出區 */
-        .output-zone {
-            flex: 1;
+        .step-icon {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: var(--bg-card-hover);
+            border: 3px solid var(--border-color);
             display: flex;
-            flex-direction: column;
             align-items: center;
-            padding: 20px;
-            background: #f0fff4;
-            border-radius: 15px;
-            border: 3px solid #48bb78;
-            position: relative;
-        }
-
-        .output-icon {
-            font-size: 4em;
-            margin-bottom: 10px;
-        }
-
-        .output-zone h3 {
-            color: #48bb78;
-            margin-bottom: 10px;
-        }
-
-        .output-message {
-            display: none;
-            background: white;
-            padding: 15px 30px;
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            justify-content: center;
             font-size: 1.2em;
-            font-weight: bold;
-            color: #48bb78;
-            animation: pop 0.5s ease-out;
-            position: relative;
+            transition: all 0.3s ease;
         }
 
-        .output-message.show {
-            display: block;
+        .process-step.active .step-icon {
+            background: var(--primary);
+            border-color: var(--primary);
+            animation: pulse 2s infinite;
         }
 
-        @keyframes pop {
-            0% { transform: scale(0); opacity: 0; }
-            50% { transform: scale(1.1); }
-            100% { transform: scale(1); opacity: 1; }
+        .process-step.completed .step-icon {
+            background: var(--success);
+            border-color: var(--success);
         }
 
-        /* 進度條樣式 */
-        .progress-container {
-            width: 100%;
-            background: #e2e8f0;
+        .process-step.error .step-icon {
+            background: var(--error);
+            border-color: var(--error);
+            animation: shake 0.5s;
+        }
+
+        .step-content {
+            background: var(--bg-main);
+            padding: 15px;
             border-radius: 10px;
-            height: 20px;
-            margin: 10px 0;
+        }
+
+        .step-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: var(--text-primary);
+        }
+
+        .step-status {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .step-progress {
+            margin-top: 10px;
+            height: 6px;
+            background: var(--border-color);
+            border-radius: 3px;
             overflow: hidden;
-            display: none;
         }
 
-        .progress-container.show {
-            display: block;
-        }
-
-        .progress-bar {
+        .step-progress-bar {
             height: 100%;
-            background: linear-gradient(90deg, #48bb78, #38a169);
+            background: linear-gradient(90deg, var(--primary), var(--success));
             width: 0%;
             transition: width 0.3s ease;
-            border-radius: 10px;
         }
 
-        .progress-text {
-            text-align: center;
-            font-size: 0.9em;
-            color: #4a5568;
-            margin-top: 5px;
-        }
-
-        /* TTS 按鈕 */
-        .tts-button {
-            background: #3182ce;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 0.9em;
+        .step-substeps {
             margin-top: 10px;
-            transition: all 0.3s;
+            padding-left: 15px;
+            border-left: 2px solid var(--border-color);
+            font-size: 0.85em;
+            color: var(--text-secondary);
         }
 
-        .tts-button:hover {
-            background: #2c5282;
-        }
-
-        .tts-button:disabled {
-            background: #cbd5e0;
-            cursor: not-allowed;
-        }
-
-        /* 叮的特效 */
-        .ding-effect {
-            position: absolute;
-            top: -50px;
-            right: 20px;
-            font-size: 3em;
-            opacity: 0;
-            animation: ding 0.8s ease-out;
-        }
-
-        @keyframes ding {
-            0% { opacity: 0; transform: scale(0) rotate(-45deg); }
-            50% { opacity: 1; transform: scale(1.2) rotate(5deg); }
-            100% { opacity: 0; transform: scale(1) rotate(0deg); }
-        }
-
-        /* 狀態顯示 */
-        .status-panel {
-            margin-top: 30px;
-            padding: 20px;
-            background: #f7fafc;
-            border-radius: 10px;
-            border-left: 4px solid #667eea;
-        }
-
-        .status-item {
+        .substep {
+            padding: 5px 0;
             display: flex;
-            justify-content: space-between;
-            padding: 10px 0;
-            border-bottom: 1px solid #e2e8f0;
+            align-items: center;
+            gap: 8px;
         }
 
-        .status-item:last-child {
-            border-bottom: none;
+        /* Result Section */
+        .result-section {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 40px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+            animation: fadeInUp 0.6s ease-out;
         }
 
-        .status-label {
-            font-weight: bold;
-            color: #4a5568;
+        .result-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+            animation: bounce 1s ease-out;
         }
 
-        .status-value {
-            color: #667eea;
+        .result-text {
+            font-size: 2.5em;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary), var(--success));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 20px;
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        /* 按鈕 */
-        .upload-btn {
-            background: #667eea;
-            color: white;
+        .result-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 30px;
             border: none;
-            padding: 15px 40px;
             border-radius: 10px;
-            font-size: 1.1em;
+            font-size: 1em;
+            font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s;
-            margin-top: 15px;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .upload-btn:hover {
-            background: #5568d3;
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
         }
 
-        .upload-btn:disabled {
-            background: #cbd5e0;
+        .btn-secondary {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border-color);
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
-            transform: none;
+            transform: none !important;
         }
 
-        /* 載入動畫 */
-        .spinner {
-            display: none;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
+        /* Stats Panel */
+        .stats-panel {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 25px;
+            border: 1px solid var(--border-color);
+            animation: fadeInUp 0.6s ease-out 0.2s backwards;
         }
 
-        .spinner.show {
-            display: block;
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
         }
 
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .stat-card {
+            background: var(--bg-main);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            transition: all 0.3s ease;
         }
 
-        /* 通知訊息 */
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .stat-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .stat-value {
+            font-size: 2em;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: var(--text-secondary);
+        }
+
+        /* Notification */
         .notification {
             position: fixed;
             top: 20px;
             right: 20px;
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 20px 25px;
+            border-radius: 15px;
+            box-shadow: var(--shadow);
             display: none;
-            max-width: 300px;
+            align-items: center;
+            gap: 15px;
+            max-width: 400px;
             z-index: 1000;
+            animation: slideInRight 0.5s ease-out;
         }
 
         .notification.show {
-            display: block;
-            animation: slideIn 0.5s ease-out;
-        }
-
-        @keyframes slideIn {
-            from { transform: translateX(400px); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
+            display: flex;
         }
 
         .notification.success {
-            border-left: 4px solid #48bb78;
+            border-left: 4px solid var(--success);
         }
 
         .notification.error {
-            border-left: 4px solid #f56565;
+            border-left: 4px solid var(--error);
+        }
+
+        .notification.warning {
+            border-left: 4px solid var(--warning);
+        }
+
+        .notification-icon {
+            font-size: 1.5em;
+        }
+
+        .notification-content {
+            flex: 1;
+        }
+
+        .notification-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .notification-message {
+            font-size: 0.9em;
+            color: var(--text-secondary);
+        }
+
+        /* Particles Effect */
+        .particles {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: var(--primary);
+            border-radius: 50%;
+            animation: particleMove 3s linear infinite;
+            opacity: 0;
+        }
+
+        /* Animations */
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeInRight {
+            from {
+                opacity: 0;
+                transform: translateX(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.7);
+            }
+            50% {
+                transform: scale(1.05);
+                box-shadow: 0 0 0 10px rgba(102, 126, 234, 0);
+            }
+        }
+
+        @keyframes bounce {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-20px);
+            }
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            75% { transform: translateX(10px); }
+        }
+
+        @keyframes slideInRight {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes particleMove {
+            0% {
+                transform: translateY(0);
+                opacity: 0;
+            }
+            50% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(-100px);
+                opacity: 0;
+            }
+        }
+
+        @keyframes typing {
+            from { width: 0; }
+            to { width: 100%; }
+        }
+
+        /* Responsive */
+        @media (max-width: 968px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .result-text {
+                font-size: 1.8em;
+            }
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 10px;
+            }
+
+            .video-section,
+            .process-section,
+            .result-section,
+            .stats-panel {
+                padding: 20px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--primary);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>🏭 影片處理生產線</h1>
-        <p>Messenger Bot 影片展示平台</p>
-    </div>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🤟 Sign & Sight</h1>
+            <p>Sign Language Recognition AI - Powered by BiGRU + MediaPipe</p>
+        </div>
 
-    <div class="production-line">
-        <div class="assembly-line">
-            <!-- 影片展示區 -->
-            <div class="video-display-zone" id="videoDisplayZone">
-                <div class="video-icon">🎬</div>
-                <h3>影片播放區</h3>
-                <video id="mainVideo" controls style="display: none; width: 100%; max-width: 400px; border-radius: 10px; margin-top: 10px;">
-                    <source src="" type="video/mp4">
-                    您的瀏覽器不支援影片播放
-                </video>
-                <div class="video-info" id="videoInfo" style="display: none; margin-top: 10px; font-size: 0.9em; color: #666;">
-                    <p>📱 來源：Messenger Bot</p>
-                    <p>⏰ 時間：<span id="videoTime">--</span></p>
+        <!-- Main Grid -->
+        <div class="main-grid">
+            <!-- Video Section -->
+            <div class="video-section">
+                <div class="video-header">
+                    <h2>
+                        <span>📱</span>
+                        <span>影片輸入</span>
+                    </h2>
+                    <div class="language-badge" id="languageBadge">繁體中文</div>
                 </div>
-                <p id="waitingText" style="color: #999; font-size: 0.9em;">等待 Messenger Bot 傳送影片...</p>
+                <div class="video-container" id="videoContainer">
+                    <div class="video-placeholder" id="videoPlaceholder">
+                        <div class="icon">🎬</div>
+                        <p>等待 Messenger Bot 傳送影片...</p>
+                    </div>
+                    <video id="mainVideo" controls style="display: none;">
+                        <source src="" type="video/mp4">
+                    </video>
+                </div>
+                <div class="video-info" id="videoInfo" style="display: none;">
+                    <div>📱 來源：Messenger Bot</div>
+                    <div>⏰ 時間：<span id="videoTime">--</span></div>
+                    <div>🎯 影片ID：<span id="videoHash">--</span></div>
+                </div>
             </div>
 
-            <!-- 傳送帶 -->
-            <div class="conveyor-belt">
-                <div class="belt">
-                    <div class="belt-stripes" id="beltStripes"></div>
-                    <div class="video-package" id="videoPackage">🎬</div>
+            <!-- Process Flow Section -->
+            <div class="process-section">
+                <div class="process-header">
+                    <h2>⚙️ 處理流程</h2>
+                </div>
+                <div class="process-timeline">
+                    <div class="timeline-line"></div>
+                    <div class="timeline-progress" id="timelineProgress"></div>
+
+                    <!-- Step 1: Upload -->
+                    <div class="process-step" id="step1">
+                        <div class="step-icon">📱</div>
+                        <div class="step-content">
+                            <div class="step-title">影片上傳</div>
+                            <div class="step-status">
+                                <span id="step1Status">⏳ 等待中</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Preprocessing -->
+                    <div class="process-step" id="step2">
+                        <div class="step-icon">🔍</div>
+                        <div class="step-content">
+                            <div class="step-title">智能預處理</div>
+                            <div class="step-status">
+                                <span id="step2Status">⏳ 等待中</span>
+                            </div>
+                            <div class="step-progress" id="step2Progress" style="display: none;">
+                                <div class="step-progress-bar" id="step2ProgressBar"></div>
+                            </div>
+                            <div class="step-substeps" id="step2Substeps" style="display: none;">
+                                <div class="substep">🎯 MediaPipe 人體檢測</div>
+                                <div class="substep">✂️ 智能裁切區域</div>
+                                <div class="substep">📏 標準化 80幀@30fps</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Feature Extraction -->
+                    <div class="process-step" id="step3">
+                        <div class="step-icon">🎨</div>
+                        <div class="step-content">
+                            <div class="step-title">特徵提取</div>
+                            <div class="step-status">
+                                <span id="step3Status">⏳ 等待中</span>
+                            </div>
+                            <div class="step-progress" id="step3Progress" style="display: none;">
+                                <div class="step-progress-bar" id="step3ProgressBar"></div>
+                            </div>
+                            <div class="step-substeps" id="step3Substeps" style="display: none;">
+                                <div class="substep">🎨 RGB 特徵 (ResNet-50)</div>
+                                <div class="substep">🦴 骨架特徵 (MediaPipe)</div>
+                                <div class="substep">🔗 合併特徵向量</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 4: Model Inference -->
+                    <div class="process-step" id="step4">
+                        <div class="step-icon">🧠</div>
+                        <div class="step-content">
+                            <div class="step-title">BiGRU 模型推論</div>
+                            <div class="step-status">
+                                <span id="step4Status">⏳ 等待中</span>
+                            </div>
+                            <div class="step-progress" id="step4Progress" style="display: none;">
+                                <div class="step-progress-bar" id="step4ProgressBar"></div>
+                            </div>
+                            <div class="step-substeps" id="step4Substeps" style="display: none;">
+                                <div class="substep">🔄 雙向 GRU 處理</div>
+                                <div class="substep">👁️ 注意力機制</div>
+                                <div class="substep">📊 Top-5 預測結果</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 5: Sentence Composition -->
+                    <div class="process-step" id="step5">
+                        <div class="step-icon">✨</div>
+                        <div class="step-content">
+                            <div class="step-title">GPT 句子重組</div>
+                            <div class="step-status">
+                                <span id="step5Status">⏳ 等待中</span>
+                            </div>
+                            <div class="step-progress" id="step5Progress" style="display: none;">
+                                <div class="step-progress-bar" id="step5ProgressBar"></div>
+                            </div>
+                            <div class="step-substeps" id="step5Substeps" style="display: none;">
+                                <div class="substep">🎯 智能選詞</div>
+                                <div class="substep">🌐 多語言翻譯</div>
+                                <div class="substep">💬 語意優化</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 6: Result -->
+                    <div class="process-step" id="step6">
+                        <div class="step-icon">✅</div>
+                        <div class="step-content">
+                            <div class="step-title">識別完成</div>
+                            <div class="step-status">
+                                <span id="step6Status">⏳ 等待中</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
+        </div>
 
-            <!-- 輸出區 -->
-            <div class="output-zone" id="outputZone">
-                <div class="output-icon">📤</div>
-                <h3>輸出區</h3>
-                <p>處理完成後顯示</p>
-                
-                <!-- 進度條 -->
-                <div class="progress-container" id="progressContainer">
-                    <div class="progress-bar" id="progressBar"></div>
-                </div>
-                <div class="progress-text" id="progressText">準備處理...</div>
-                
-                <div class="output-message" id="outputMessage">
-                    Hello World! ✨
-                </div>
-                
-                <!-- TTS 按鈕 -->
-                <button class="tts-button" id="ttsButton" onclick="speakResult()">
+        <!-- Result Section -->
+        <div class="result-section">
+            <div class="result-icon" id="resultIcon">💬</div>
+            <div class="result-text" id="resultText">等待識別結果...</div>
+            <div class="result-actions">
+                <button class="btn btn-primary" id="ttsButton" onclick="speakResult()" disabled>
                     🔊 語音播報
+                </button>
+                <button class="btn btn-secondary" id="copyButton" onclick="copyResult()" disabled>
+                    📋 複製結果
                 </button>
             </div>
         </div>
 
-        <div class="spinner" id="spinner"></div>
-
-        <!-- 狀態面板 -->
-        <div class="status-panel">
-            <div class="status-item">
-                <span class="status-label">📊 當前狀態：</span>
-                <span class="status-value" id="statusText">等待 Messenger Bot 傳送影片</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">🎬 目前影片：</span>
-                <span class="status-value" id="currentVideo">無</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">📦 已收到影片數：</span>
-                <span class="status-value" id="processedCount">0</span>
+        <!-- Stats Panel -->
+        <div class="stats-panel">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value" id="totalProcessed">0</div>
+                    <div class="stat-label">已處理影片</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-value" id="avgTime">--</div>
+                    <div class="stat-label">平均處理時間</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🎯</div>
+                    <div class="stat-value" id="accuracy">96%</div>
+                    <div class="stat-label">識別準確度</div>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- 通知訊息 -->
+    <!-- Notification -->
     <div class="notification" id="notification">
-        <div id="notificationText"></div>
+        <div class="notification-icon" id="notifIcon">ℹ️</div>
+        <div class="notification-content">
+            <div class="notification-title" id="notifTitle">通知</div>
+            <div class="notification-message" id="notifMessage">訊息內容</div>
+        </div>
     </div>
 
     <script>
-        const beltStripes = document.getElementById('beltStripes');
-        const videoPackage = document.getElementById('videoPackage');
-        const outputMessage = document.getElementById('outputMessage');
-        const outputZone = document.getElementById('outputZone');
-        const spinner = document.getElementById('spinner');
-        const statusText = document.getElementById('statusText');
-        const currentVideo = document.getElementById('currentVideo');
-        const processedCount = document.getElementById('processedCount');
-        const notification = document.getElementById('notification');
-        const notificationText = document.getElementById('notificationText');
+        // Global Variables
+        let currentRecognizedSentence = "";
+        let currentLanguage = "繁體中文";
+        let totalProcessed = 0;
+        let processingStartTime = 0;
+        let processingTimes = [];
+        
+        // 處理狀態追蹤
+        let processingState = {
+            isProcessing: false,
+            currentStep: null,
+            lastUpdateTime: 0,
+            windowsTotal: 0,
+            windowsCurrent: 0
+        };
+
+        // DOM Elements
         const mainVideo = document.getElementById('mainVideo');
+        const videoPlaceholder = document.getElementById('videoPlaceholder');
         const videoInfo = document.getElementById('videoInfo');
         const videoTime = document.getElementById('videoTime');
-        const waitingText = document.getElementById('waitingText');
-        const progressContainer = document.getElementById('progressContainer');
-        const progressBar = document.getElementById('progressBar');
-        const progressText = document.getElementById('progressText');
+        const videoHash = document.getElementById('videoHash');
+        const languageBadge = document.getElementById('languageBadge');
+        const resultIcon = document.getElementById('resultIcon');
+        const resultText = document.getElementById('resultText');
         const ttsButton = document.getElementById('ttsButton');
+        const copyButton = document.getElementById('copyButton');
+        const notification = document.getElementById('notification');
+        const timelineProgress = document.getElementById('timelineProgress');
 
-        let totalProcessed = 0;
-        let currentRecognizedSentence = "";
+        // Steps
+        const steps = {
+            step1: { element: document.getElementById('step1'), status: document.getElementById('step1Status') },
+            step2: { element: document.getElementById('step2'), status: document.getElementById('step2Status'), progress: document.getElementById('step2Progress'), bar: document.getElementById('step2ProgressBar'), substeps: document.getElementById('step2Substeps') },
+            step3: { element: document.getElementById('step3'), status: document.getElementById('step3Status'), progress: document.getElementById('step3Progress'), bar: document.getElementById('step3ProgressBar'), substeps: document.getElementById('step3Substeps') },
+            step4: { element: document.getElementById('step4'), status: document.getElementById('step4Status'), progress: document.getElementById('step4Progress'), bar: document.getElementById('step4ProgressBar'), substeps: document.getElementById('step4Substeps') },
+            step5: { element: document.getElementById('step5'), status: document.getElementById('step5Status'), progress: document.getElementById('step5Progress'), bar: document.getElementById('step5ProgressBar'), substeps: document.getElementById('step5Substeps') },
+            step6: { element: document.getElementById('step6'), status: document.getElementById('step6Status') }
+        };
 
-        function speakResult() {
-            if (!currentRecognizedSentence) {
-                alert('沒有可播報的內容');
-                return;
-            }
-            
-            // 檢查瀏覽器是否支持語音合成
-            if ('speechSynthesis' in window) {
-                const utterance = new SpeechSynthesisUtterance(currentRecognizedSentence);
-                
-                // 設置語音參數
-                utterance.lang = 'zh-TW'; // 設定為中文
-                utterance.rate = 0.8; // 語速
-                utterance.pitch = 1; // 音調
-                utterance.volume = 1; // 音量
-                
-                // 禁用按鈕並顯示狀態
-                ttsButton.disabled = true;
-                ttsButton.textContent = '🔊 播報中...';
-                
-                utterance.onend = function() {
-                    ttsButton.disabled = false;
-                    ttsButton.textContent = '🔊 語音播報';
-                };
-                
-                utterance.onerror = function() {
-                    ttsButton.disabled = false;
-                    ttsButton.textContent = '🔊 語音播報';
-                    alert('語音播報失敗');
-                };
-                
-                speechSynthesis.speak(utterance);
-            } else {
-                alert('您的瀏覽器不支持語音合成功能');
-            }
-        }
-
-        function updateProgress(progress, message) {
-            progressContainer.classList.add('show');
-            progressBar.style.width = progress + '%';
-            progressText.textContent = message;
-            
-            // 更新狀態文字
-            statusText.textContent = `處理中: ${progress}% - ${message}`;
-            
-            // 同步更新傳送帶動畫速度
-            updateConveyorBeltSpeed(progress);
-        }
-
-        function updateConveyorBeltSpeed(progress) {
-            // 根據進度調整傳送帶速度
-            // 進度越快，傳送帶越快
-            const speed = Math.max(0.5, progress / 20); // 最小0.5秒，最大5秒
-            beltStripes.style.animationDuration = speed + 's';
-            
-            // 確保傳送帶在動
-            if (!beltStripes.classList.contains('moving')) {
-                beltStripes.classList.add('moving');
-            }
-        }
-
-        function hideProgress() {
-            progressContainer.classList.remove('show');
-            progressBar.style.width = '0%';
-            progressText.textContent = '準備處理...';
-            
-            // 重置傳送帶速度
-            beltStripes.style.animationDuration = '2s';
-        }
-
-        function showDingEffect() {
-            const ding = document.createElement('div');
-            ding.className = 'ding-effect';
-            ding.textContent = '🔔';
-            outputZone.appendChild(ding);
-            
-            // 播放叮的音效（如果有的話）
-            setTimeout(() => {
-                ding.remove();
-            }, 800);
-        }
-
-        function resetProductionLine() {
-            beltStripes.classList.remove('moving');
-            videoPackage.classList.remove('moving');
-            outputMessage.classList.remove('show');
-            statusText.textContent = '等待 Messenger Bot 傳送影片';
-            hideProgress(); // 重置進度條
-            ttsButton.disabled = true; // 禁用TTS按鈕
-
-            // 重置動畫
-            setTimeout(() => {
-                videoPackage.style.animation = 'none';
-                setTimeout(() => {
-                    videoPackage.style.animation = '';
-                }, 10);
-            }, 100);
-        }
-
-        function loadVideo(videoUrl, videoHash, timestamp) {
-            // 載入影片
-            mainVideo.src = videoUrl;
-            mainVideo.style.display = 'block';
-            waitingText.style.display = 'none';
-
-            // 顯示影片資訊
-            videoInfo.style.display = 'block';
-            videoTime.textContent = new Date(timestamp * 1000).toLocaleString('zh-TW');
-
-            // 更新當前影片狀態
-            currentVideo.textContent = `messenger_${videoHash.substring(0, 8)}`;
-
-            console.log('✅ 影片已載入:', videoUrl);
-        }
-
-        function showNotification(message, type = 'success') {
-            notificationText.textContent = message;
-            notification.className = 'notification show ' + type;
-            
-            setTimeout(() => {
-                notification.classList.remove('show');
-            }, 4000);
-        }
-
-        function sleep(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
-        // 初始載入處理數量
+        // Load initial stats
         fetch('/stats')
             .then(res => res.json())
             .then(data => {
-                if (data.processed_count !== undefined) {
-                    totalProcessed = data.processed_count;
-                    processedCount.textContent = totalProcessed;
-                }
+                totalProcessed = data.processed_count || 0;
+                document.getElementById('totalProcessed').textContent = totalProcessed;
             })
             .catch(err => console.error('載入統計失敗:', err));
 
-        // ===== WebSocket 連接（接收 Messenger Bot 的觸發）=====
+        // WebSocket Connection
         const socket = io({
             transports: ['websocket', 'polling'],
             upgrade: true,
@@ -624,72 +876,370 @@
 
         socket.on('connect', () => {
             console.log('✅ WebSocket 已連接，Socket ID:', socket.id);
+            showNotification('系統已連線', '已連接到手語識別服務器', 'success');
+            
+            // 重置所有步驟（防止斷線後狀態不同步）
+            resetAllSteps();
         });
 
         socket.on('connect_error', (error) => {
             console.error('❌ WebSocket 連線失敗:', error);
+            showNotification('連線錯誤', '無法連接到服務器，正在重試...', 'error');
         });
 
+        socket.on('disconnect', (reason) => {
+            console.log('❌ WebSocket 已斷線，原因:', reason);
+            showNotification('連線中斷', '與服務器的連接已中斷', 'warning');
+        });
+
+        socket.on('reconnect', (attemptNumber) => {
+            console.log('🔄 WebSocket 重新連線成功，嘗試次數:', attemptNumber);
+            showNotification('重新連線', '已恢復與服務器的連接', 'success');
+        });
+
+        socket.on('reconnect_attempt', (attemptNumber) => {
+            console.log('🔄 嘗試重新連線...', attemptNumber);
+        });
+
+        socket.on('reconnect_error', (error) => {
+            console.error('❌ 重新連線失敗:', error);
+        });
+
+        socket.on('reconnect_failed', () => {
+            console.error('❌ WebSocket 重新連線失敗（已達最大嘗試次數）');
+            showNotification('連線失敗', '無法連接到服務器，請重新整理頁面', 'error');
+        });
+
+        // Messenger Upload Event
         socket.on('messenger_upload', async (data) => {
             console.log('📨 收到 Messenger 上傳事件:', data);
 
             if (data.status === 'start') {
-                // 開始動畫
-                statusText.textContent = `Messenger Bot 處理中: ${data.video_name}`;
-                currentVideo.textContent = data.video_name;
-                currentRecognizedSentence = data.recognized_sentence || "處理中...";
+                processingStartTime = Date.now();
+                resetAllSteps();
+                
+                // Step 1: Upload Complete
+                updateStep('step1', 'active', '✅ 已接收');
+                setTimeout(() => {
+                    updateStep('step1', 'completed', '✅ 完成 0.3s');
+                    updateTimelineProgress(16.6);
+                }, 300);
 
-                // 啟動傳送帶和影片動畫
-                beltStripes.classList.add('moving');
-                videoPackage.classList.add('moving');
-
-                showNotification(`📱 Messenger Bot 上傳影片: ${data.video_name}`, 'success');
+                showNotification('影片已接收', `來自 Messenger Bot: ${data.video_name}`, 'success');
 
             } else if (data.status === 'complete') {
-                // 完成動畫
-                showDingEffect();
+                // Step 6: Complete
+                updateStep('step6', 'active', '✅ 識別完成');
+                setTimeout(() => {
+                    updateStep('step6', 'completed', '✅ 完成');
+                    updateTimelineProgress(100);
+                }, 300);
 
-                await sleep(300);
-                
-                // 更新句子並顯示
+                // Display result
                 currentRecognizedSentence = data.recognized_sentence || data.message.replace("識別結果: ", "");
-                outputMessage.textContent = currentRecognizedSentence;
-                outputMessage.classList.add('show');
-                
-                // 啟用TTS按鈕
-                ttsButton.disabled = false;
-                
-                statusText.textContent = '影片處理完成！';
-                hideProgress(); // 隱藏進度條
+                displayResult(currentRecognizedSentence);
 
+                // Update stats
                 totalProcessed++;
-                processedCount.textContent = totalProcessed;
+                document.getElementById('totalProcessed').textContent = totalProcessed;
 
-                // 載入影片到播放器
+                // Calculate processing time
+                const processingTime = (Date.now() - processingStartTime) / 1000;
+                processingTimes.push(processingTime);
+                const avgTime = (processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length).toFixed(1);
+                document.getElementById('avgTime').textContent = avgTime + 's';
+
+                // Load video
                 if (data.video_url && data.video_hash) {
                     loadVideo(data.video_url, data.video_hash, data.timestamp);
                 }
 
-                showNotification(data.message, 'success');
+                showNotification('識別完成', currentRecognizedSentence, 'success');
 
-                // 自動播報（可選）
-                // setTimeout(() => speakResult(), 1000);
-
-                // 3秒後重置動畫（但保留影片）
-                await sleep(3000);
-                resetProductionLine();
+                // Enable buttons
+                ttsButton.disabled = false;
+                copyButton.disabled = false;
             }
         });
 
-        // 處理進度更新事件
+        // Processing Progress Event - 完全同步版本
         socket.on('processing_progress', (data) => {
             console.log('📊 收到進度更新:', data);
-            updateProgress(data.progress, data.message);
+            
+            const message = data.message.toLowerCase();
+            const progress = data.progress || 0;
+            const current = data.current || 0;
+            const total = data.total || 1;
+            
+            // 計算實際進度百分比
+            const actualProgress = Math.round((current / total) * 100);
+            
+            // Step 2: Preprocessing (預處理階段)
+            if (message.includes('開始處理影片') || message.includes('讀取影片') || message.includes('標準化')) {
+                if (!steps.step2.element.classList.contains('active')) {
+                    updateStep('step2', 'active', '🔄 預處理中...');
+                    updateTimelineProgress(20);
+                }
+            }
+            
+            // Step 3: Feature Extraction (特徵提取階段)
+            // 後端訊息: "處理窗口 X/Y" | "特徵提取完成 - 窗口 X"
+            else if (message.includes('處理窗口') || message.includes('特徵提取')) {
+                // 如果 step2 還在進行，先完成它
+                if (steps.step2.element.classList.contains('active') && !steps.step2.element.classList.contains('completed')) {
+                    updateStep('step2', 'completed', '✅ 完成');
+                    updateTimelineProgress(33.3);
+                }
+                
+                // 提取窗口信息
+                const windowMatch = message.match(/窗口\s*(\d+)[\s\/]*(\d+)?/);
+                if (windowMatch) {
+                    const currentWindow = parseInt(windowMatch[1]);
+                    const totalWindows = parseInt(windowMatch[2]) || total;
+                    const windowProgress = Math.round((currentWindow / totalWindows) * 100);
+                    
+                    updateStep('step3', 'active', `🔄 窗口 ${currentWindow}/${totalWindows} (${windowProgress}%)`, windowProgress);
+                    
+                    // 計算時間線進度 (33.3% -> 50%)
+                    const timelinePercent = 33.3 + (windowProgress / 100) * 16.7;
+                    updateTimelineProgress(timelinePercent);
+                    
+                    // 如果是最後一個窗口，標記為完成
+                    if (currentWindow >= totalWindows) {
+                        setTimeout(() => {
+                            updateStep('step3', 'completed', '✅ 完成');
+                            updateTimelineProgress(50);
+                        }, 500);
+                    }
+                }
+            }
+            
+            // Step 4: Model Inference (模型推論階段)
+            // 後端訊息: "推論完成 - 窗口 X"
+            else if (message.includes('推論')) {
+                // 如果 step3 還在進行，先完成它
+                if (steps.step3.element.classList.contains('active') && !steps.step3.element.classList.contains('completed')) {
+                    updateStep('step3', 'completed', '✅ 完成');
+                    updateTimelineProgress(50);
+                }
+                
+                // 提取窗口信息
+                const windowMatch = message.match(/窗口\s*(\d+)/);
+                if (windowMatch) {
+                    const currentWindow = parseInt(windowMatch[1]);
+                    const windowProgress = Math.round((currentWindow / total) * 100);
+                    
+                    updateStep('step4', 'active', `🔄 推論窗口 ${currentWindow}/${total} (${windowProgress}%)`, windowProgress);
+                    
+                    // 計算時間線進度 (50% -> 66.6%)
+                    const timelinePercent = 50 + (windowProgress / 100) * 16.6;
+                    updateTimelineProgress(timelinePercent);
+                    
+                    // 如果是最後一個窗口，標記為完成
+                    if (currentWindow >= total) {
+                        setTimeout(() => {
+                            updateStep('step4', 'completed', '✅ 完成');
+                            updateTimelineProgress(66.6);
+                        }, 500);
+                    }
+                } else {
+                    updateStep('step4', 'active', `🔄 推論中 ${actualProgress}%`, actualProgress);
+                    updateTimelineProgress(50 + (actualProgress / 100) * 16.6);
+                }
+            }
+            
+            // Step 5: Sentence Composition (句子重組階段)
+            // 後端訊息: "重組" | "openai" | "gpt" | "翻譯"
+            else if (message.includes('重組') || message.includes('openai') || message.includes('gpt') || message.includes('翻譯')) {
+                // 如果 step4 還在進行，先完成它
+                if (steps.step4.element.classList.contains('active') && !steps.step4.element.classList.contains('completed')) {
+                    updateStep('step4', 'completed', '✅ 完成');
+                    updateTimelineProgress(66.6);
+                }
+                
+                updateStep('step5', 'active', `🔄 AI 重組中...`);
+                updateTimelineProgress(75);
+                
+                // 如果包含"完成"，標記為完成
+                if (message.includes('完成')) {
+                    setTimeout(() => {
+                        updateStep('step5', 'completed', '✅ 完成');
+                        updateTimelineProgress(83.3);
+                    }, 500);
+                }
+            }
+            
+            // 通用進度處理
+            else {
+                // 根據 progress 百分比自動判斷階段
+                if (progress < 20) {
+                    updateStep('step2', 'active', `🔄 預處理 ${progress}%`, progress);
+                    updateTimelineProgress(16.6 + (progress / 100) * 16.7);
+                } else if (progress < 40) {
+                    updateStep('step3', 'active', `🔄 特徵提取 ${progress}%`, progress);
+                    updateTimelineProgress(33.3 + ((progress - 20) / 20) * 16.7);
+                } else if (progress < 70) {
+                    updateStep('step4', 'active', `🔄 模型推論 ${progress}%`, progress);
+                    updateTimelineProgress(50 + ((progress - 40) / 30) * 16.6);
+                } else if (progress < 100) {
+                    updateStep('step5', 'active', `🔄 句子重組 ${progress}%`, progress);
+                    updateTimelineProgress(66.6 + ((progress - 70) / 30) * 16.7);
+                }
+            }
         });
 
-        socket.on('disconnect', () => {
-            console.log('❌ WebSocket 已斷線');
-        });
+        // Functions
+        function updateStep(stepId, state, statusText, progress = 0) {
+            const step = steps[stepId];
+            
+            // Remove all state classes
+            step.element.classList.remove('active', 'completed', 'error');
+            
+            // Add new state
+            if (state !== 'waiting') {
+                step.element.classList.add(state);
+            }
+            
+            // Update status text
+            step.status.textContent = statusText;
+            
+            // Update progress bar if exists
+            if (step.progress && step.bar) {
+                if (progress > 0) {
+                    step.progress.style.display = 'block';
+                    step.bar.style.width = progress + '%';
+                    step.substeps.style.display = 'block';
+                } else {
+                    step.progress.style.display = 'none';
+                    step.substeps.style.display = 'none';
+                }
+            }
+        }
+
+        function updateTimelineProgress(percent) {
+            timelineProgress.style.height = percent + '%';
+        }
+
+        function resetAllSteps() {
+            Object.keys(steps).forEach(stepId => {
+                updateStep(stepId, 'waiting', '⏳ 等待中', 0);
+            });
+            updateTimelineProgress(0);
+            resultText.textContent = '處理中...';
+            resultIcon.textContent = '⏳';
+            ttsButton.disabled = true;
+            copyButton.disabled = true;
+            
+            // 重置處理狀態
+            processingState = {
+                isProcessing: false,
+                currentStep: null,
+                lastUpdateTime: 0,
+                windowsTotal: 0,
+                windowsCurrent: 0
+            };
+        }
+        
+        // 狀態防抖函數 - 避免重複更新
+        function shouldUpdateStep(stepId) {
+            const now = Date.now();
+            if (processingState.currentStep === stepId && now - processingState.lastUpdateTime < 200) {
+                return false; // 200ms 內同一步驟不重複更新
+            }
+            processingState.currentStep = stepId;
+            processingState.lastUpdateTime = now;
+            return true;
+        }
+
+        function displayResult(text) {
+            resultText.textContent = text;
+            resultIcon.textContent = '✨';
+            
+            // Typing animation
+            resultText.style.animation = 'none';
+            setTimeout(() => {
+                resultText.style.animation = 'fadeInUp 0.6s ease-out';
+            }, 10);
+        }
+
+        function loadVideo(videoUrl, hash, timestamp) {
+            mainVideo.src = videoUrl;
+            mainVideo.style.display = 'block';
+            videoPlaceholder.style.display = 'none';
+            videoInfo.style.display = 'block';
+            videoTime.textContent = new Date(timestamp * 1000).toLocaleString('zh-TW');
+            videoHash.textContent = hash.substring(0, 12);
+        }
+
+        function showNotification(title, message, type = 'success') {
+            const icons = {
+                success: '✅',
+                error: '❌',
+                warning: '⚠️',
+                info: 'ℹ️'
+            };
+            
+            document.getElementById('notifIcon').textContent = icons[type] || icons.info;
+            document.getElementById('notifTitle').textContent = title;
+            document.getElementById('notifMessage').textContent = message;
+            
+            notification.className = 'notification show ' + type;
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 4000);
+        }
+
+        function speakResult() {
+            if (!currentRecognizedSentence) {
+                showNotification('提示', '沒有可播報的內容', 'warning');
+                return;
+            }
+            
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(currentRecognizedSentence);
+                utterance.lang = 'zh-TW';
+                utterance.rate = 0.8;
+                utterance.pitch = 1;
+                utterance.volume = 1;
+                
+                ttsButton.disabled = true;
+                ttsButton.innerHTML = '<span class="spinner"></span> 播報中...';
+                
+                utterance.onend = function() {
+                    ttsButton.disabled = false;
+                    ttsButton.innerHTML = '🔊 語音播報';
+                };
+                
+                utterance.onerror = function() {
+                    ttsButton.disabled = false;
+                    ttsButton.innerHTML = '🔊 語音播報';
+                    showNotification('錯誤', '語音播報失敗', 'error');
+                };
+                
+                speechSynthesis.speak(utterance);
+            } else {
+                showNotification('不支援', '您的瀏覽器不支持語音合成', 'error');
+            }
+        }
+
+        function copyResult() {
+            if (!currentRecognizedSentence) {
+                showNotification('提示', '沒有可複製的內容', 'warning');
+                return;
+            }
+            
+            navigator.clipboard.writeText(currentRecognizedSentence).then(() => {
+                showNotification('成功', '已複製到剪貼簿', 'success');
+                copyButton.innerHTML = '✅ 已複製';
+                setTimeout(() => {
+                    copyButton.innerHTML = '📋 複製結果';
+                }, 2000);
+            }).catch(() => {
+                showNotification('錯誤', '複製失敗', 'error');
+            });
+        }
     </script>
 </body>
 </html>
+

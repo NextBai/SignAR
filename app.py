@@ -350,6 +350,16 @@ def process_video_task(sender_id, video_path, target_language):
         print(f"🌐 目標語言: {target_language}")
         
         # ==================== 步驟 1: 影片預處理 ====================
+        # 發送預處理開始事件
+        with app.app_context():
+            socketio.emit('processing_progress', {
+                'progress': 0,
+                'current': 0,
+                'total': 100,
+                'message': '開始處理影片 - 預處理階段',
+                'timestamp': time.time()
+            }, namespace='/')
+        
         preprocessed_path, preprocess_success = preprocess_video_async(video_path)
         
         if preprocess_success and preprocessed_path != video_path:
@@ -358,6 +368,16 @@ def process_video_task(sender_id, video_path, target_language):
         else:
             print(f"⚠️ 使用原始影片進行識別（預處理失敗或未啟用）")
             video_to_process = video_path
+        
+        # 發送預處理完成事件
+        with app.app_context():
+            socketio.emit('processing_progress', {
+                'progress': 20,
+                'current': 20,
+                'total': 100,
+                'message': '預處理完成 - 開始特徵提取',
+                'timestamp': time.time()
+            }, namespace='/')
         
         # ==================== 步驟 2: 手語識別 ====================
         recognized_sentence = process_video_and_get_sentence_with_language(
