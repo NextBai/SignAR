@@ -300,7 +300,7 @@ def preprocess_video_async(video_path):
         temp_file.close()
         
         print(f"📹 開始預處理影片: {Path(video_path).name}")
-        print(f"  - 智能裁切: 啟用（聚焦簽名者）")
+        print(f"  - 智能裁切: 啟用（聚焦頭部和肩膀）")
         print(f"  - 標準化: 80幀 @ 30fps, 224x224")
         
         # 執行預處理（augmentor=None，僅標準化）

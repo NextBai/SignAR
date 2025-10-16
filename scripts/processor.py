@@ -163,7 +163,7 @@ class VideoProcessor:
     OUTPUT_EXT = '.mp4'     # 統一輸出格式
     
     # 人體裁切參數
-    CROP_PADDING = 0.15     # 邊界框擴展比例（15%）
+    CROP_PADDING = 0.40     # 邊界框擴展比例（40%）- 大幅增加裁切區域
     MIN_DETECTION_CONFIDENCE = 0.5  # 最低檢測信心度
     
     def __init__(self, enable_cropping=True, target_frames=None):
@@ -183,12 +183,14 @@ class VideoProcessor:
         # 目標幀數（訓練時使用，辨識時由 SlidingWindowInference 決定）
         self.target_frames = target_frames
         
+        # 第一幀裁切參數（用於固定裁切區域）
+        self.fixed_crop_params = None
+        
         # 初始化 MediaPipe Pose（延遲初始化）
         self.mp_pose = None
         self.pose_detector = None
         
         if self.enable_cropping:
-            print("🔧 初始化 MediaPipe Pose 檢測器...")
             self.mp_pose = mp.solutions.pose
             self.pose_detector = self.mp_pose.Pose(
                 static_image_mode=False,
@@ -196,7 +198,6 @@ class VideoProcessor:
                 min_detection_confidence=self.MIN_DETECTION_CONFIDENCE,
                 min_tracking_confidence=0.5
             )
-            print("✅ MediaPipe Pose 已初始化")
         
     def _check_ffmpeg(self):
         """檢查系統是否有ffmpeg"""
@@ -210,17 +211,18 @@ class VideoProcessor:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
     
-    def detect_and_crop_person(self, frame):
+    def detect_and_crop_person(self, frame, is_first_frame=False):
         """
-        檢測並裁切畫面中「最前面」的人的完整上半身
+        檢測並裁切畫面中「最前面」的人的頭部和肩膀區域
         
-        使用 MediaPipe Pose 檢測人體關鍵點，計算包含：
+        使用 MediaPipe Pose 檢測人體關鍵點，主要聚焦：
         - 頭部（鼻子、眼睛、耳朵）
-        - 上半身（肩膀、手肘、手腕）
-        - 完整手臂（確保不裁切）
+        - 肩膀區域（提供上半身穩定性）
+        - 固定裁切框避免視覺跳動
         
         Args:
             frame: 輸入幀 [H, W, 3] BGR
+            is_first_frame: 是否為影片的第一幀（用於固定裁切參數）
         
         Returns:
             cropped_frame: 裁切後的幀（如果檢測失敗返回原始幀）
@@ -230,6 +232,18 @@ class VideoProcessor:
             return frame, False
         
         h, w = frame.shape[:2]
+        
+        # 如果已經有固定裁切參數且不是第一幀，直接使用
+        if self.fixed_crop_params is not None and not is_first_frame:
+            x_min, y_min, x_max, y_max = self.fixed_crop_params
+            # 確保裁切區域在當前幀的範圍內
+            x_min = max(0, min(x_min, w-1))
+            x_max = max(x_min+1, min(x_max, w))
+            y_min = max(0, min(y_min, h-1))
+            y_max = max(y_min+1, min(y_max, h))
+            
+            cropped = frame[y_min:y_max, x_min:x_max]
+            return cropped if cropped.size > 0 else frame, cropped.size > 0
         
         # 轉換為 RGB（MediaPipe 需要 RGB）
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -244,24 +258,22 @@ class VideoProcessor:
         # 提取關鍵點
         landmarks = results.pose_landmarks.landmark
         
-        # 定義需要包含的關鍵點（上半身 + 手臂）
+        # 定義需要包含的關鍵點（主要追焦頭部 + 肩膀，避免手臂干擾）
         # MediaPipe Pose 關鍵點索引：
         # 0: 鼻子, 1-2: 眼睛, 3-4: 耳朵
-        # 11-12: 肩膀, 13-14: 手肘, 15-16: 手腕, 17-22: 手指（可選）
-        upper_body_indices = [
-            0,   # 鼻子（頭部頂部參考）
-            1, 2, 3, 4,  # 眼睛、耳朵
-            11, 12,  # 左右肩膀
-            13, 14,  # 左右手肘
-            15, 16,  # 左右手腕
-            17, 18, 19, 20, 21, 22  # 手指（確保完整手部）
+        # 11-12: 肩膀, 13-14: 手肘, 15-16: 手腕, 17-22: 手指
+        head_and_shoulders_indices = [
+            0,   # 鼻子（頭部中心）
+            1, 2,  # 左右眼睛
+            3, 4,  # 左右耳朵
+            11, 12,  # 左右肩膀（提供上半身穩定性）
         ]
         
         # 計算邊界框
         x_coords = []
         y_coords = []
         
-        for idx in upper_body_indices:
+        for idx in head_and_shoulders_indices:
             if idx < len(landmarks):
                 landmark = landmarks[idx]
                 # 檢查關鍵點可見性（visibility > 0.5 表示可見）
@@ -291,20 +303,39 @@ class VideoProcessor:
         y_min = max(0, y_min - padding_y)
         y_max = min(h, y_max + padding_y)
         
-        # 確保裁切區域是正方形（避免變形）
-        crop_width = x_max - x_min
-        crop_height = y_max - y_min
+        # 固定裁切區域大小，避免視覺上的放大縮小
+        # 使用固定的邊長（取原始邊界框的最大值作為基準，並增加60%以獲得更大區域）
+        base_size = max(x_max - x_min, y_max - y_min)
+        fixed_size = int(base_size * 1.6)  # 增加60%讓裁切框更大
         
-        if crop_width > crop_height:
-            # 寬度大於高度，擴展高度
-            diff = crop_width - crop_height
-            y_min = max(0, y_min - diff // 2)
-            y_max = min(h, y_max + diff // 2)
-        else:
-            # 高度大於寬度，擴展寬度
-            diff = crop_height - crop_width
-            x_min = max(0, x_min - diff // 2)
-            x_max = min(w, x_max + diff // 2)
+        # 以檢測到的中心為基準，創建固定大小的裁切區域
+        # 稍微往下調整中心點，避免裁切框偏上
+        center_x = (x_min + x_max) // 2
+        center_y = (y_min + y_max) // 2
+        
+        # 往下調整中心點 10%，讓裁切框包含更多下方區域
+        center_y = int(center_y * 1.1)
+        
+        half_size = fixed_size // 2
+        x_min = max(0, center_x - half_size)
+        x_max = min(w, center_x + half_size)
+        y_min = max(0, center_y - half_size)
+        y_max = min(h, center_y + half_size)
+        
+        # 如果裁切區域小於固定大小，嘗試居中擴展
+        if x_max - x_min < fixed_size:
+            expand = (fixed_size - (x_max - x_min)) // 2
+            x_min = max(0, x_min - expand)
+            x_max = min(w, x_max + expand)
+        
+        if y_max - y_min < fixed_size:
+            expand = (fixed_size - (y_max - y_min)) // 2
+            y_min = max(0, y_min - expand)
+            y_max = min(h, y_max + expand)
+        
+        # 如果是第一幀，儲存裁切參數
+        if is_first_frame:
+            self.fixed_crop_params = (x_min, y_min, x_max, y_max)
         
         # 裁切
         cropped = frame[y_min:y_max, x_min:x_max]
@@ -372,12 +403,15 @@ class VideoProcessor:
         Returns:
             處理後的幀列表（標準化到 224x224）
         """
+        # 重置固定裁切參數（為每個新影片重置）
+        self.fixed_crop_params = None
+        
         processed_frames = []
         
-        for frame in frames:
+        for i, frame in enumerate(frames):
             # 1. 智能裁切人體（如果啟用）
             if self.enable_cropping:
-                frame_cropped, success = self.detect_and_crop_person(frame)
+                frame_cropped, success = self.detect_and_crop_person(frame, is_first_frame=(i == 0))
                 if success:
                     frame = frame_cropped
             
@@ -535,9 +569,9 @@ class VideoProcessor:
             cropped_frames = []
             crop_success_count = 0
             
-            for frame in normalized_frames:
+            for i, frame in enumerate(normalized_frames):
                 if self.enable_cropping:
-                    frame_cropped, success = self.detect_and_crop_person(frame)
+                    frame_cropped, success = self.detect_and_crop_person(frame, is_first_frame=(i == 0))
                     if success:
                         cropped_frames.append(frame_cropped)
                         crop_success_count += 1
@@ -596,35 +630,15 @@ class VideoProcessor:
         os.makedirs(output_dir, exist_ok=True)
         
         # CPU 硬體優化：自動檢測 CPU 核心數
+        cpu_count = psutil.cpu_count(logical=True)
         if max_workers is None:
-            cpu_count = psutil.cpu_count(logical=True)
-            # 使用 CPU 核心數的 75%，避免系統過載
-            max_workers = max(1, int(cpu_count * 0.75))
-            print(f"🔧 檢測到 {cpu_count} 個邏輯 CPU 核心，使用 {max_workers} 個工作線程")
+            # M1 最優配置：使用 P-cores (性能核心) 數量
+            physical_cores = psutil.cpu_count(logical=False)
+            # 預留 1 核給系統，75% 用於視頻處理
+            max_workers = max(2, int((physical_cores - 1) * 0.75))
         
-        print(f"\n📋 處理規格:")
-        print(f"   - 智能裁切: {'✅ 啟用 (MediaPipe Pose)' if self.enable_cropping else '❌ 停用'}")
-        if self.enable_cropping:
-            print(f"      └─ 自動檢測最前面的人（上半身 + 完整手臂）")
-            print(f"      └─ Padding: {self.CROP_PADDING * 100:.0f}%")
-        if self.target_frames is not None:
-            print(f"   - 幀數: {self.target_frames} 幀")
-        else:
-            print(f"   - 幀數: 保持原始長度（由呼叫者決定）")
-        print(f"   - FPS: {self.TARGET_FPS} fps")
-        print(f"   - 解析度: {self.TARGET_WIDTH}x{self.TARGET_HEIGHT}")
-        if self.has_ffmpeg:
-            print(f"   - 編碼: h.264 (libx264) ✓")
-        else:
-            print(f"   - 編碼: mp4v (建議安裝ffmpeg以使用h264)")
-        
-        if augmentor is not None:
-            print(f"   - 數據增強: ✅ 啟用")
-            print(f"      └─ 確定性增強（原始+旋轉+縮放+亮度+水平反轉）")
-            print(f"      └─ 每個樣本輸出 8 個版本")
-        else:
-            print(f"   - 數據增強: ❌ 停用（僅輸出標準化版本）")
-        print()
+        max_workers = max(1, min(max_workers, cpu_count))
+        print(f"🔧 使用 {max_workers} 個工作線程 (系統 {cpu_count} 核心)")
         
         # 獲取所有影片文件
         video_files = []
@@ -649,8 +663,6 @@ class VideoProcessor:
                     
                     video_files.append((src_path, dest_path))
         
-        print(f"📁 發現 {len(video_files)} 個影片檔案待處理\n")
-        
         # 使用多線程處理影片
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(tqdm(
@@ -663,8 +675,6 @@ class VideoProcessor:
             ))
         
         success_count = sum(results)
-        print(f"\n✅ 成功處理 {success_count}/{len(video_files)} 個影片")
-        
         if success_count < len(video_files):
             print(f"⚠️  失敗 {len(video_files) - success_count} 個影片")
 
@@ -685,26 +695,18 @@ def main():
         # Kaggle 環境配置
         input_dir = "/kaggle/input/augment/augmented_videos"
         output_dir = "/kaggle/working/videos_normalized"
-        print("🌐 檢測到 Kaggle 環境")
     else:
         # 本地環境配置
         current_dir = os.path.dirname(os.path.abspath(__file__))
         # 使用augmented_videos作為輸入
         input_dir = os.path.join(os.path.dirname(current_dir), "/Users/baidongqu/Desktop/MVP/videos")
         output_dir = os.path.join(os.path.dirname(current_dir), "videos_normalized")
-        print("💻 使用本地環境")
-    
-    print(f"📂 輸入目錄: {input_dir}")
-    print(f"📂 輸出目錄: {output_dir}")
-    print()
     
     # 初始化處理器（啟用智能裁切 + 80幀標準化）
     processor = VideoProcessor(enable_cropping=True, target_frames=80)
     
     # 初始化數據增強器（訓練時使用）
     augmentor = DataAugmentor()
-    print("✅ 數據增強器已初始化")
-    print()
     
     # 處理影片（包含數據增強）
     processor.process_directory(input_dir, output_dir, augmentor=augmentor)
@@ -714,8 +716,6 @@ def main():
         zip_path = "/kaggle/working/videos_normalized.zip"
     else:
         zip_path = os.path.join(os.path.dirname(current_dir), "videos_normalized.zip")
-    
-    print(f"\n📦 正在打包輸出檔案到: {zip_path}")
     
     try:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:

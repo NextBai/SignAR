@@ -25,9 +25,9 @@ Messenger Bot 接收 → 下載影片
     ↓
 VideoProcessor.process_video()
     ├─ MediaPipe Pose 檢測人體
-    ├─ 智能裁切（聚焦簽名者）
-    ├─ 包含完整上半身 + 手臂
-    ├─ 15% padding 避免裁切不完整
+    ├─ 智能裁切（聚焦頭部和肩膀）
+    ├─ 固定裁切區域避免跳動
+    ├─ 40% padding 確保足夠視野
     ├─ 幀數標準化（80幀）
     ├─ 解析度標準化（224x224）
     └─ 保存到臨時文件
@@ -203,7 +203,7 @@ def process_video_task(sender_id, video_path, target_language):
 優勢：
 ✅ 自動聚焦簽名者
 ✅ 去除背景干擾
-✅ 完整上半身 + 手臂
+✅ 頭部和肩膀區域
 ✅ 識別準確度提升至 92-96%
 ```
 
@@ -226,7 +226,7 @@ upper_body_indices = [
 
 ### 2. **智能邊界框計算**
 - 計算所有關鍵點的邊界
-- 添加 15% padding
+- 添加 40% padding
 - 調整為正方形（避免變形）
 - 確保不超出畫面邊界
 
@@ -260,7 +260,7 @@ VIDEO_PREPROCESSOR = VideoProcessor(enable_cropping=False)
 ```python
 # 在 scripts/processor.py 中修改
 class VideoProcessor:
-    CROP_PADDING = 0.15  # 邊界框擴展（15%）
+    CROP_PADDING = 0.40  # 邊界框擴展（40%）- 大幅增加裁切區域
     MIN_DETECTION_CONFIDENCE = 0.5  # 檢測信心度閾值
 ```
 
@@ -307,9 +307,9 @@ class VideoProcessor:
 
 2. **智能裁切**
    - ✅ MediaPipe Pose 檢測
-   - ✅ 自動聚焦簽名者
-   - ✅ 完整上半身 + 手臂
-   - ✅ 15% padding
+   - ✅ 自動聚焦頭部和肩膀
+   - ✅ 固定裁切區域避免跳動
+   - ✅ 40% padding 確保視野
 
 3. **處理流程優化**
    - ✅ 異步處理
@@ -326,7 +326,7 @@ class VideoProcessor:
 
 - **識別準確度**：85-90% → **92-96%**（提升 5-10%）
 - **背景干擾**：大量 → **幾乎無**
-- **手臂完整性**：可能裁切 → **完整保留**
+- **裁切穩定性**：可能跳動 → **固定區域**
 - **處理時間**：+3-5秒（預處理開銷，可接受）
 
 ---
