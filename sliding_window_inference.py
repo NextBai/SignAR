@@ -160,7 +160,7 @@ class SlidingWindowInference:
     TARGET_WIDTH = 224      # 目標寬度
     TARGET_HEIGHT = 224     # 目標高度
     
-    def __init__(self, model_path, label_map_path, device='mps', stride=80, openai_api_key=None, progress_callback=None):
+    def __init__(self, model_path, label_map_path, device='mps', stride=30, openai_api_key=None, progress_callback=None):
         """
         初始化滑動窗口識別器
         
