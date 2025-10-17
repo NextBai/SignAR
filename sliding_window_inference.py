@@ -315,18 +315,19 @@ class SlidingWindowInference:
         if len(all_frames) == 0:
             raise RuntimeError(f"影片無有效幀: {video_path}")
 
-        # 計算目標幀數：線性插值至 80 幀的倍數
+        # 計算目標幀數：線性插值至最大窗口大小的倍數（確保多尺度兼容）
         original_count = len(all_frames)
-        
+        max_window_size = max(self.WINDOW_SIZES)  # 使用最大窗口大小確保兼容性
+
         # 計算需要多少個窗口（無條件進位）
-        num_windows = int(np.ceil(original_count / self.WINDOW_SIZE))
-        
-        # 目標幀數 = 窗口數量 × 80
-        target_frame_count = num_windows * self.WINDOW_SIZE
-        
-        print(f"  🎯 線性插值策略:")
+        num_windows = int(np.ceil(original_count / max_window_size))
+
+        # 目標幀數 = 窗口數量 × 最大窗口大小
+        target_frame_count = num_windows * max_window_size
+
+        print(f"  🎯 多尺度線性插值策略:")
         print(f"     原始幀數: {original_count}")
-        print(f"     窗口數量: {num_windows} 個（每個 {self.WINDOW_SIZE} 幀）")
+        print(f"     窗口數量: {num_windows} 個（每個最大 {max_window_size} 幀）")
         print(f"     目標幀數: {target_frame_count} 幀")
         
         # 線性插值重採樣
@@ -370,7 +371,7 @@ class SlidingWindowInference:
         提取窗口特徵（並行 RGB + Skeleton）
 
         Args:
-            frames: 窗口幀列表 (80, 224, 224, 3)
+            frames: 窗口幀列表 (window_size, 224, 224, 3)，window_size 可以是 20、40 或 80
 
         Returns:
             features: (300, 1119) 特徵矩陣
