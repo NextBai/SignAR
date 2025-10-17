@@ -160,7 +160,7 @@ class SlidingWindowInference:
     TARGET_WIDTH = 224      # 目標寬度
     TARGET_HEIGHT = 224     # 目標高度
     
-    def __init__(self, model_path, label_map_path, device='mps', stride=80, openai_api_key=None, progress_callback=None):
+    def __init__(self, model_path, label_map_path, device='mps', stride=40, openai_api_key=None, progress_callback=None):
         """
         初始化滑動窗口識別器
         
@@ -169,9 +169,9 @@ class SlidingWindowInference:
             label_map_path: 標籤映射路徑
             device: 設備類型（用於特徵提取器，推論強制使用 CPU）
             stride: 滑動步長（幀數）
-                   - 80 幀（預設）：無重疊，最快，適合快速掃描
+                   - 80 幀：無重疊，最快，適合快速掃描
                    - 60 幀：25% 重疊，平衡
-                   - 40 幀：50% 重疊，更密集檢測
+                   - 40 幀（新預設）：50% 重疊，更密集檢測，精度和速度平衡
             openai_api_key: OpenAI API 金鑰（用於句子重組）
             progress_callback: 進度回調函數，參數為 (current, total, message)
         
@@ -787,7 +787,7 @@ def main():
     model_path = 'model_output/best_model_mps.keras'  # 模型路徑
     label_path = 'model_output/label_map.json'  # 標籤映射路徑
     device = 'mps'  # 特徵提取設備
-    stride = 80  # 滑動步長（幀數）
+    stride = 40  # 滑動步長（幀數）- 50% 重疊，精度和速度平衡
     save_results = False  # 是否保存結果到 JSON（預設不保存）
     
     # OpenAI API Key（請設置您的 API Key）
