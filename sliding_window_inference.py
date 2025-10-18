@@ -152,29 +152,29 @@ class MixupTop3Accuracy(keras.metrics.Metric):
 
 
 class SlidingWindowInference:
-    """多尺度滑動窗口手語識別器"""
-
+    """滑動窗口手語識別器"""
+    
     # 參數配置
-    WINDOW_SIZES = [20, 40, 80]  # 多尺度窗口大小（幀數）
+    WINDOW_SIZE = 80        # 每個窗口 80 幀（約 2.67 秒 @ 30fps）
     TARGET_FPS = 30         # 目標幀率
     TARGET_WIDTH = 224      # 目標寬度
     TARGET_HEIGHT = 224     # 目標高度
     
-    def __init__(self, model_path, label_map_path, device='mps', stride=80, openai_api_key=None, progress_callback=None):
+    def __init__(self, model_path, label_map_path, device='mps', stride=60, openai_api_key=None, progress_callback=None):
         """
-        初始化多尺度滑動窗口識別器
-
+        初始化滑動窗口識別器
+        
         Args:
             model_path: 模型路徑
             label_map_path: 標籤映射路徑
             device: 設備類型（用於特徵提取器，推論強制使用 CPU）
-            stride: 滑動步長（幀數），所有尺度都使用同一個 stride
-                   - 80 幀：無重疊，最快，適合快速掃描（多尺度新預設）
-                   - 60 幀：25% 重疊，平衡
-                   - 40 幀：50% 重疊，更密集檢測，精度和速度平衡
+            stride: 滑動步長（幀數）
+                   - 80 幀：無重疊，最快，適合快速掃描
+                   - 60 幀（預設）：25% 重疊，平衡精度和速度
+                   - 40 幀：50% 重疊，更密集檢測但計算量大
             openai_api_key: OpenAI API 金鑰（用於句子重組）
             progress_callback: 進度回調函數，參數為 (current, total, message)
-
+        
         注意：訓練數據平均單詞長度為 88 幀（3.1 秒）
         """
         self.device = device
@@ -192,14 +192,13 @@ class SlidingWindowInference:
                 self.openai_client = None
         
         print("=" * 70)
-        print("🎬 多尺度滑動窗口手語識別系統")
+        print("🎬 滑動窗口手語識別系統 - 方案 C（單尺度優化）")
         print("=" * 70)
-        print("多尺度窗口配置:")
-        for i, size in enumerate(self.WINDOW_SIZES):
-            overlap = (size - self.stride) / size * 100 if size > self.stride else 0
-            print(f"  尺度 {i+1}: {size} 幀窗口，步長 {self.stride} 幀 ({overlap:.0f}% 重疊，~{size/self.TARGET_FPS:.2f} 秒)")
-        min_window = min(self.WINDOW_SIZES)
-        print(f"支援任意長度影片（最短需 {min_window} 幀）")
+        overlap_percent = (self.WINDOW_SIZE - self.stride) / self.WINDOW_SIZE * 100
+        print(f"窗口大小: {self.WINDOW_SIZE} 幀 (~{self.WINDOW_SIZE/self.TARGET_FPS:.2f} 秒)")
+        print(f"滑動步長: {self.stride} 幀 (~{self.stride/self.TARGET_FPS:.2f} 秒)")
+        print(f"重疊程度: {overlap_percent:.0f}% - 平衡精度與速度")
+        print(f"支援任意長度影片（最短需 {self.WINDOW_SIZE} 幀）")
         print("=" * 70)
         
         # 載入模型
@@ -315,19 +314,18 @@ class SlidingWindowInference:
         if len(all_frames) == 0:
             raise RuntimeError(f"影片無有效幀: {video_path}")
 
-        # 計算目標幀數：線性插值至最大窗口大小的倍數（確保多尺度兼容）
+        # 計算目標幀數：線性插值至 80 幀的倍數
         original_count = len(all_frames)
-        max_window_size = max(self.WINDOW_SIZES)  # 使用最大窗口大小確保兼容性
-
+        
         # 計算需要多少個窗口（無條件進位）
-        num_windows = int(np.ceil(original_count / max_window_size))
-
-        # 目標幀數 = 窗口數量 × 最大窗口大小
-        target_frame_count = num_windows * max_window_size
-
-        print(f"  🎯 多尺度線性插值策略:")
+        num_windows = int(np.ceil(original_count / self.WINDOW_SIZE))
+        
+        # 目標幀數 = 窗口數量 × 80
+        target_frame_count = num_windows * self.WINDOW_SIZE
+        
+        print(f"  🎯 線性插值策略:")
         print(f"     原始幀數: {original_count}")
-        print(f"     窗口數量: {num_windows} 個（每個最大 {max_window_size} 幀）")
+        print(f"     窗口數量: {num_windows} 個（每個 {self.WINDOW_SIZE} 幀）")
         print(f"     目標幀數: {target_frame_count} 幀")
         
         # 線性插值重採樣
@@ -371,7 +369,7 @@ class SlidingWindowInference:
         提取窗口特徵（並行 RGB + Skeleton）
 
         Args:
-            frames: 窗口幀列表 (window_size, 224, 224, 3)，window_size 可以是 20、40 或 80
+            frames: 窗口幀列表 (80, 224, 224, 3)
 
         Returns:
             features: (300, 1119) 特徵矩陣
@@ -459,221 +457,144 @@ class SlidingWindowInference:
         results = [(self.idx_to_word[idx], float(predictions[0][idx])) for idx in top_indices]
 
         return results
-
-    def _fuse_multi_scale_results(self, all_scale_results):
-        """
-        融合多尺度結果，避免重複單詞
-
-        Args:
-            all_scale_results: 各尺度的結果列表 [scale_results1, scale_results2, ...]
-
-        Returns:
-            fused_results: 融合後的結果列表
-        """
-        if not all_scale_results:
-            return []
-
-        # 1. 將所有尺度的結果扁平化並按時間排序
-        all_windows = []
-        for scale_results in all_scale_results:
-            all_windows.extend(scale_results)
-
-        # 按開始時間排序
-        all_windows.sort(key=lambda x: x['time_start'])
-
-        # 2. 融合重疊窗口的結果
-        fused_results = []
-        seen_words = set()
-
-        for window in all_windows:
-            top_word = window['top5'][0]['word']
-            top_conf = window['top5'][0]['confidence']
-
-            # 檢查是否已經有這個單詞（避免連續重複）
-            if top_word not in seen_words:
-                # 創建融合後的結果結構
-                fused_result = {
-                    'window_id': len(fused_results),  # 重新編號
-                    'frame_start': window['frame_start'],
-                    'frame_end': window['frame_end'],
-                    'time_start': window['time_start'],
-                    'time_end': window['time_end'],
-                    'scale_info': f"尺度{window['scale_idx']+1}({window['window_size']}幀)",
-                    'top5': window['top5']
-                }
-                fused_results.append(fused_result)
-                seen_words.add(top_word)
-            else:
-                # 如果是重複單詞，比較信心度
-                prev_result = fused_results[-1]
-                prev_conf = prev_result['top5'][0]['confidence']
-
-                if top_conf > prev_conf:
-                    # 更新為信心度更高的結果
-                    prev_result.update({
-                        'frame_start': window['frame_start'],
-                        'frame_end': window['frame_end'],
-                        'time_start': window['time_start'],
-                        'time_end': window['time_end'],
-                        'scale_info': f"尺度{window['scale_idx']+1}({window['window_size']}幀)",
-                        'top5': window['top5']
-                    })
-
-        print(f"\n🎯 多尺度融合完成: {len(all_windows)} 個原始窗口 → {len(fused_results)} 個融合窗口")
-        return fused_results
-
+    
     def process_video(self, video_path, save_results=True):
         """
-        處理整個影片（多尺度滑動窗口）
-
+        處理整個影片（滑動窗口）
+        
         Args:
             video_path: 影片路徑
             save_results: 是否保存結果到 JSON
-
+        
         Returns:
-            results: 融合後的辨識結果
+            results: 所有窗口的辨識結果
         """
         start_time = time.time()
-
+        
         # 1. 讀取並標準化影片
         frames = self.load_and_normalize_video(video_path)
         total_frames = len(frames)
-
-        # 2. 對每個尺度進行處理
-        all_scale_results = []
-        total_windows = 0
-
-        for scale_idx, window_size in enumerate(self.WINDOW_SIZES):
-            print(f"\n🔄 尺度 {scale_idx+1}/{len(self.WINDOW_SIZES)} - {window_size} 幀窗口處理中...")
-
-            # 計算此尺度的窗口數量
-            num_windows = (total_frames - window_size) // self.stride + 1
-            if num_windows <= 0:
-                print(f"  ⚠️  影片太短，跳過 {window_size} 幀窗口（需要至少 {window_size} 幀）")
-                continue
-
-            total_windows += num_windows
-            print(f"  窗口數量: {num_windows} 個")
-
-            # 發送此尺度開始進度
+        
+        # 2. 計算窗口數量
+        num_windows = (total_frames - self.WINDOW_SIZE) // self.stride + 1
+        if num_windows <= 0:
+            raise ValueError(f"影片太短，無法創建窗口（需要至少 {self.WINDOW_SIZE} 幀）")
+        
+        print(f"\n🔄 開始滑動窗口推論...")
+        print(f"  總幀數: {total_frames}")
+        print(f"  窗口數量: {num_windows}")
+        print(f"  每個窗口: {self.WINDOW_SIZE} 幀 ({self.WINDOW_SIZE / self.TARGET_FPS:.2f} 秒)")
+        print("=" * 70)
+        
+        # 發送初始進度
+        if self.progress_callback:
+            self.progress_callback(0, num_windows, "開始處理影片")
+        
+        # 3. 遍歷所有窗口
+        all_results = []
+        
+        for i in range(num_windows):
+            window_start = i * self.stride
+            window_end = window_start + self.WINDOW_SIZE
+            
+            # 計算時間範圍
+            time_start = window_start / self.TARGET_FPS
+            time_end = window_end / self.TARGET_FPS
+            
+            print(f"\n窗口 {i+1}/{num_windows} - 時間: {time_start:.2f}s - {time_end:.2f}s")
+            
+            # 發送窗口開始進度
             if self.progress_callback:
-                self.progress_callback(0, num_windows, f"開始處理 {window_size} 幀尺度")
-
-            # 3. 遍歷此尺度的所有窗口
-            scale_results = []
-
-            for i in range(num_windows):
-                window_start = i * self.stride
-                window_end = window_start + window_size
-
-                # 計算時間範圍
-                time_start = window_start / self.TARGET_FPS
-                time_end = window_end / self.TARGET_FPS
-
-                print(f"\n  窗口 {i+1}/{num_windows} - 時間: {time_start:.2f}s - {time_end:.2f}s ({window_size} 幀)")
-
-                # 發送窗口開始進度
+                self.progress_callback(i, num_windows, f"處理窗口 {i+1}/{num_windows}")
+            
+            # 提取窗口幀
+            window_frames = frames[window_start:window_end]
+            
+            # 提取特徵
+            t0 = time.time()
+            try:
+                features = self.extract_window_features(window_frames)
+                t1 = time.time()
+                print(f"  ✅ 特徵提取: {(t1-t0)*1000:.0f}ms")
+                
+                # 發送特徵提取完成進度
                 if self.progress_callback:
-                    self.progress_callback(i, num_windows, f"處理 {window_size} 幀窗口 {i+1}/{num_windows}")
-
-                # 提取窗口幀
-                window_frames = frames[window_start:window_end]
-
-                # 提取特徵
+                    self.progress_callback(i + 0.3, num_windows, f"特徵提取完成 - 窗口 {i+1}")
+                
+                # 推論
                 t0 = time.time()
-                try:
-                    features = self.extract_window_features(window_frames)
-                    t1 = time.time()
-                    print(f"    ✅ 特徵提取: {(t1-t0)*1000:.0f}ms")
-
-                    # 發送特徵提取完成進度
-                    if self.progress_callback:
-                        self.progress_callback(i + 0.3, num_windows, f"特徵提取完成 - {window_size} 幀窗口 {i+1}")
-
-                    # 推論
-                    t0 = time.time()
-                    top5 = self.predict_window(features)
-                    t1 = time.time()
-                    print(f"    ✅ 推論: {(t1-t0)*1000:.0f}ms")
-
-                    # 發送推論完成進度
-                    if self.progress_callback:
-                        self.progress_callback(i + 0.7, num_windows, f"推論完成 - {window_size} 幀窗口 {i+1}")
-
-                    # 顯示結果
-                    print(f"    🎯 Top-5 結果:")
-                    for j, (word, conf) in enumerate(top5, 1):
-                        bar = "█" * int(conf * 30)
-                        print(f"       {j}. {word:12s} {conf*100:5.2f}% {bar}")
-
-                    # 保存結果（包含尺度資訊）
-                    window_result = {
-                        'scale_idx': scale_idx,
-                        'window_size': window_size,
-                        'window_id': i,
-                        'frame_start': window_start,
-                        'frame_end': window_end,
-                        'time_start': round(time_start, 2),
-                        'time_end': round(time_end, 2),
-                        'top5': [{'word': w, 'confidence': round(c, 4)} for w, c in top5]
-                    }
-                    scale_results.append(window_result)
-
-                    # 發送窗口完成進度
-                    if self.progress_callback:
-                        self.progress_callback(i + 1, num_windows, f"{window_size} 幀窗口 {i+1} 完成")
-
-                except Exception as e:
-                    print(f"    ❌ 處理失敗: {e}")
-                    if self.progress_callback:
-                        self.progress_callback(i + 1, num_windows, f"{window_size} 幀窗口 {i+1} 失敗")
-                    continue
-
-            all_scale_results.append(scale_results)
-            print(f"  ✅ 尺度 {scale_idx+1} 處理完成: {len(scale_results)}/{num_windows} 窗口成功")
-
-        # 4. 融合多尺度結果
-        fused_results = self._fuse_multi_scale_results(all_scale_results)
+                top5 = self.predict_window(features)
+                t1 = time.time()
+                print(f"  ✅ 推論: {(t1-t0)*1000:.0f}ms")
+                
+                # 發送推論完成進度
+                if self.progress_callback:
+                    self.progress_callback(i + 0.7, num_windows, f"推論完成 - 窗口 {i+1}")
+                
+                # 顯示結果
+                print(f"  🎯 Top-5 結果:")
+                for j, (word, conf) in enumerate(top5, 1):
+                    bar = "█" * int(conf * 30)
+                    print(f"     {j}. {word:12s} {conf*100:5.2f}% {bar}")
+                
+                # 保存結果
+                window_result = {
+                    'window_id': i,
+                    'frame_start': window_start,
+                    'frame_end': window_end,
+                    'time_start': round(time_start, 2),
+                    'time_end': round(time_end, 2),
+                    'top5': [{'word': w, 'confidence': round(c, 4)} for w, c in top5]
+                }
+                all_results.append(window_result)
+                
+                # 發送窗口完成進度
+                if self.progress_callback:
+                    self.progress_callback(i + 1, num_windows, f"窗口 {i+1} 完成")
+                
+            except Exception as e:
+                print(f"  ❌ 處理失敗: {e}")
+                if self.progress_callback:
+                    self.progress_callback(i + 1, num_windows, f"窗口 {i+1} 失敗")
+                continue
         
         total_time = time.time() - start_time
         
-        # 5. 輸出總結
+        # 4. 輸出總結
         print("\n" + "=" * 70)
-        print("🎉 多尺度處理完成！")
+        print("🎉 處理完成！")
         print("=" * 70)
         print(f"總耗時: {total_time:.2f}s")
-        print(f"總原始窗口數: {total_windows}")
-        print(f"融合後窗口數: {len(fused_results)}")
-        if len(fused_results) > 0:
-            print(f"平均每窗口: {total_time/len(fused_results):.2f}s")
+        print(f"處理窗口數: {len(all_results)}/{num_windows}")
+        if len(all_results) > 0:
+            print(f"平均每窗口: {total_time/len(all_results):.2f}s")
         else:
             print("平均每窗口: N/A (無成功處理窗口)")
-
-        # 6. 保存結果
+        
+        # 5. 保存結果
         if save_results:
             output_file = Path(video_path).stem + "_results.json"
             output_path = Path("outputs") / output_file
             output_path.parent.mkdir(exist_ok=True)
-
+            
             result_data = {
                 'video_path': str(video_path),
                 'video_name': Path(video_path).name,
                 'total_frames': total_frames,
                 'duration': round(total_frames / self.TARGET_FPS, 2),
-                'window_sizes': self.WINDOW_SIZES,
+                'num_windows': len(all_results),
+                'window_size': self.WINDOW_SIZE,
                 'stride': self.stride,
-                'total_raw_windows': total_windows,
-                'fused_windows': len(fused_results),
                 'processing_time': round(total_time, 2),
-                'results': fused_results
+                'results': all_results
             }
-
+            
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(result_data, f, ensure_ascii=False, indent=2)
-
+            
             print(f"💾 結果已保存: {output_path}")
-
-        return fused_results
+        
+        return all_results
     
     def compose_sentence_with_openai(self, results, target_language='繁體中文'):
         """
@@ -847,18 +768,17 @@ class SlidingWindowInference:
             print(f"  {word:12s}: {count} 次")
         
         print("\n時間軸結果:")
-        print(f"{'窗口':<6} {'時間範圍':<15} {'尺度':<10} {'Top-1 單詞':<12} {'信心度':<8} Top-2 ~ Top-5")
-        print("-" * 80)
-
+        print(f"{'窗口':<6} {'時間範圍':<15} {'Top-1 單詞':<12} {'信心度':<8} Top-2 ~ Top-5")
+        print("-" * 70)
+        
         for result in results:
             window_id = result['window_id'] + 1
             time_range = f"{result['time_start']:.1f}s-{result['time_end']:.1f}s"
-            scale_info = result.get('scale_info', '融合')
             top1 = result['top5'][0]
-            top_others = ", ".join([f"{r['word']}({r['confidence']*100:.0f}%)"
+            top_others = ", ".join([f"{r['word']}({r['confidence']*100:.0f}%)" 
                                    for r in result['top5'][1:]])
-
-            print(f"{window_id:<6} {time_range:<15} {scale_info:<10} {top1['word']:<12} "
+            
+            print(f"{window_id:<6} {time_range:<15} {top1['word']:<12} "
                   f"{top1['confidence']*100:>5.1f}%   {top_others}")
 
 
@@ -869,7 +789,7 @@ def main():
     model_path = 'model_output/best_model_mps.keras'  # 模型路徑
     label_path = 'model_output/label_map.json'  # 標籤映射路徑
     device = 'mps'  # 特徵提取設備
-    stride = 80  # 滑動步長（幀數）- 多尺度新預設，無重疊最快
+    stride = 60  # 滑動步長（幀數）- 25% 重疊，平衡精度和速度（方案 C）
     save_results = False  # 是否保存結果到 JSON（預設不保存）
     
     # OpenAI API Key（請設置您的 API Key）
