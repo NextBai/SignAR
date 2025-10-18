@@ -18,90 +18,300 @@ from concurrent.futures import ThreadPoolExecutor
 import zipfile
 import psutil
 import mediapipe as mp
+import threading
+import asyncio
+from functools import partial
+
+
+# ==================== MediaPipe 線程池管理 ====================
+
+class MediaPipePosePool:
+    """
+    MediaPipe Pose 線程池管理
+    - 每個線程使用獨立的檢測器實例（避免時間戳記衝突）
+    - 使用 ThreadLocal 確保線程隔離
+    - 自動資源管理
+    
+    根據 MediaPipe 設計原理，確保每個線程獨立實例化可以：
+    1. 避免資源競爭和數據混淆
+    2. 充分利用 CPU/GPU 並行處理能力
+    3. 防止時間戳記不一致問題
+    """
+    _thread_local = threading.local()
+    _lock = threading.Lock()
+    _all_instances = []
+    
+    @classmethod
+    def get_detector(cls, min_detection_confidence=0.5):
+        """
+        獲取當前線程專用的 Pose 檢測器實例
+        
+        Args:
+            min_detection_confidence: 最低檢測信心度
+        
+        Returns:
+            MediaPipe Pose 檢測器實例（線程專用）
+        """
+        # 檢查當前線程是否已有實例
+        if not hasattr(cls._thread_local, 'detector') or cls._thread_local.detector is None:
+            with cls._lock:
+                # 為當前線程創建獨立的實例
+                mp_pose = mp.solutions.pose
+                detector = mp_pose.Pose(
+                    static_image_mode=False,
+                    model_complexity=1,
+                    min_detection_confidence=min_detection_confidence,
+                    min_tracking_confidence=0.5
+                )
+                cls._thread_local.detector = detector
+                cls._all_instances.append(detector)
+        
+        return cls._thread_local.detector
+    
+    @classmethod
+    def close_thread_detector(cls):
+        """清理當前線程的檢測器"""
+        if hasattr(cls._thread_local, 'detector') and cls._thread_local.detector is not None:
+            cls._thread_local.detector.close()
+            cls._thread_local.detector = None
+    
+    @classmethod
+    def close_all(cls):
+        """清理所有線程的檢測器"""
+        with cls._lock:
+            for detector in cls._all_instances:
+                try:
+                    detector.close()
+                except:
+                    pass
+            cls._all_instances.clear()
+
+
+class SelfieSegmentationPool:
+    """
+    MediaPipe SelfieSegmentation 線程池管理
+    - 每個線程使用獨立的分割器實例（避免時間戳記衝突）
+    - 使用 ThreadLocal 確保線程隔離
+    - 自動資源管理
+    """
+    _thread_local = threading.local()
+    _lock = threading.Lock()
+    _all_instances = []
+
+    @classmethod
+    def get_segmenter(cls, model_selection=1):
+        """
+        獲取當前線程專用的 SelfieSegmentation 實例
+
+        Args:
+            model_selection: 模型選擇 (0=一般品質/速度, 1=較高品質/較慢速度)
+
+        Returns:
+            MediaPipe SelfieSegmentation 實例（線程專用）
+        """
+        # 檢查當前線程是否已有實例
+        if not hasattr(cls._thread_local, 'segmenter') or cls._thread_local.segmenter is None:
+            with cls._lock:
+                # 為當前線程創建獨立的實例
+                mp_selfie_segmentation = mp.solutions.selfie_segmentation
+                segmenter = mp_selfie_segmentation.SelfieSegmentation(
+                    model_selection=model_selection
+                )
+                cls._thread_local.segmenter = segmenter
+                cls._all_instances.append(segmenter)
+        
+        return cls._thread_local.segmenter
+
+    @classmethod
+    def close_thread_segmenter(cls):
+        """清理當前線程的分割器"""
+        if hasattr(cls._thread_local, 'segmenter') and cls._thread_local.segmenter is not None:
+            cls._thread_local.segmenter.close()
+            cls._thread_local.segmenter = None
+
+    @classmethod
+    def close_all(cls):
+        """清理所有線程的分割器"""
+        with cls._lock:
+            for segmenter in cls._all_instances:
+                try:
+                    segmenter.close()
+                except:
+                    pass
+            cls._all_instances.clear()
+
+
+# ==================== 數據增強快取機制 ====================
+
+class AugmentationCache:
+    """
+    增強結果快取 - 避免重複計算相同的增強操作
+    """
+    def __init__(self):
+        self._cache = {}
+        self._lock = threading.Lock()
+    
+    def get_key(self, frame_hash, augmentation_type):
+        """生成快取鍵"""
+        return f"{frame_hash}_{augmentation_type}"
+    
+    def get(self, frame_hash, augmentation_type):
+        """獲取快取的增強結果"""
+        key = self.get_key(frame_hash, augmentation_type)
+        with self._lock:
+            return self._cache.get(key)
+    
+    def set(self, frame_hash, augmentation_type, result):
+        """保存增強結果到快取"""
+        key = self.get_key(frame_hash, augmentation_type)
+        with self._lock:
+            self._cache[key] = result
+    
+    def clear(self):
+        """清理快取"""
+        with self._lock:
+            self._cache.clear()
 
 
 # ==================== 數據增強模組（獨立） ====================
 class DataAugmentor:
     """
-    數據增強器 - 僅用於訓練前處理
+    數據增強器 - 手語辨識最佳化版本
     
-    功能：
-    - 極輕微旋轉 (±2°)
-    - 極輕微縮放 (0.98-1.02x)
-    - 極輕微亮度調整 (±5%)
-    - 水平翻轉
+    增強策略（保留語意的微調）：
+    1. 基礎版本：Original (原始) 和 Mirror (水平翻轉)
+    2. 光照增強：亮度調整 (±2%)、對比度調整 (±3%)
+    3. 視覺增強：飽和度調整 (±3%)、輕微高斯模糊
+    4. 幾何增強：旋轉 (±1°)
     
-    注意：辨識時不需要使用此模組！
+    組合策略：
+    - Original + Original_Brightness + Original_Contrast + Original_Saturation
+    - Mirror + Mirror_Brightness + Mirror_Contrast + Mirror_Saturation
+    = 共 8 個版本
     """
     
-    def __init__(self):
-        # 數據增強參數 - 極為保守
+    def __init__(self, cache=None):
+        # 增強參數 - 極為保守（針對手語辨識）
         self.augmentation_params = {
-            'rotation_range': (-2, 2),      # 極輕微旋轉角度範圍（度）
-            'scale_range': (0.98, 1.02),    # 極輕微縮放範圍
-            'brightness_range': (0.95, 1.05), # 極輕微亮度調整範圍
+            'rotation_range': (-1, 1),              # ±1° 旋轉
+            'brightness_range': (0.98, 1.02),      # ±2% 亮度
+            'contrast_range': (0.97, 1.03),        # ±3% 對比度
+            'saturation_range': (0.97, 1.03),      # ±3% 飽和度
+            'blur_sigma': 0.3,                      # 輕微高斯模糊
         }
+        self.cache = cache if cache is not None else AugmentationCache()
+    
+    def _adjust_brightness(self, frame, factor):
+        """調整亮度"""
+        adjusted = frame.astype(np.float32)
+        adjusted = np.clip(adjusted * factor, 0, 255)
+        return adjusted.astype(np.uint8)
+    
+    def _adjust_contrast(self, frame, factor):
+        """調整對比度 (相對於中值 128)"""
+        adjusted = frame.astype(np.float32)
+        adjusted = 128 + (adjusted - 128) * factor
+        adjusted = np.clip(adjusted, 0, 255)
+        return adjusted.astype(np.uint8)
+    
+    def _adjust_saturation(self, frame):
+        """調整飽和度 - 轉換為 HSV 調整 S 通道"""
+        # BGR to HSV
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+        # 調整 S 通道 (±3%)
+        saturation_factor = np.random.RandomState(42).choice([0.97, 1.03])
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation_factor, 0, 255)
+        # HSV to BGR
+        hsv = hsv.astype(np.uint8)
+        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        return bgr
+    
+    def _apply_blur(self, frame, sigma):
+        """應用輕微高斯模糊"""
+        if sigma > 0:
+            kernel_size = 3
+            return cv2.GaussianBlur(frame, (kernel_size, kernel_size), sigma)
+        return frame
     
     def apply_augmentation(self, frame, augmentation_type=None):
         """
-        確定性數據增強
+        確定性數據增強（快取版本）
         
         Args:
             frame: 輸入幀 [H, W, 3]
-            augmentation_type: 增強類型 ('rotation', 'scale', 'brightness', 'flip', None)
+            augmentation_type: 增強類型
+                - None: 原始幀
+                - 'mirror': 水平翻轉
+                - 'brightness': 亮度調整
+                - 'contrast': 對比度調整
+                - 'saturation': 飽和度調整
+                - 'rotation': 旋轉
+                - 複合: 'mirror+brightness' 等
         
         Returns:
             增強後的幀 [H, W, 3]
         """
-        augmented = frame.astype(np.float32)
-
-        if augmentation_type == 'rotation':
-            # 確定性旋轉 (±2°)
-            angle = np.random.RandomState(42).choice([-2, -1, 1, 2])
-            h, w = augmented.shape[:2]
-            center = (w // 2, h // 2)
-            rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-            augmented = cv2.warpAffine(augmented, rotation_matrix, (w, h),
-                                     borderMode=cv2.BORDER_REFLECT)
-
-        elif augmentation_type == 'scale':
-            # 確定性縮放 (0.98 或 1.02)
-            scale = np.random.RandomState(42).choice([0.98, 1.02])
-            h, w = augmented.shape[:2]
-            new_w, new_h = int(w * scale), int(h * scale)
-
-            scaled = cv2.resize(augmented, (new_w, new_h))
-
-            # 居中放置縮放後的圖像
-            result = np.zeros_like(augmented)
-            start_x = (w - new_w) // 2
-            start_y = (h - new_h) // 2
-
-            if scale > 1.0:  # 放大：裁剪中心區域
-                src_start_x = (new_w - w) // 2
-                src_start_y = (new_h - h) // 2
-                result[:, :] = scaled[src_start_y:src_start_y+h, src_start_x:src_start_x+w]
-            else:  # 縮小：居中放置
-                end_x = start_x + new_w
-                end_y = start_y + new_h
-                result[start_y:end_y, start_x:end_x] = scaled
-
-            augmented = result
-
-        elif augmentation_type == 'brightness':
-            # 確定性亮度調整 (±5%)
-            brightness_factor = np.random.RandomState(42).choice([0.95, 1.05])
-            augmented = np.clip(augmented * brightness_factor, 0, 255)
-
-        elif augmentation_type == 'flip':
-            # 水平反轉
-            augmented = cv2.flip(augmented, 1)
-
-        return augmented.astype(np.uint8)
+        # 計算幀的雜湊值用於快取
+        frame_hash = hash(frame.tobytes())
+        
+        # 嘗試從快取獲取
+        cached_result = self.cache.get(frame_hash, augmentation_type)
+        if cached_result is not None:
+            return cached_result
+        
+        augmented = frame.astype(np.uint8)
+        
+        # 解析複合增強類型（例如 "mirror+brightness"）
+        aug_list = augmentation_type.split('+') if augmentation_type else []
+        
+        for aug_type in aug_list:
+            aug_type = aug_type.strip()
+            
+            if aug_type == 'mirror':
+                augmented = cv2.flip(augmented, 1)
+            
+            elif aug_type == 'brightness':
+                factor = np.random.RandomState(42).choice([0.98, 1.02])
+                augmented = self._adjust_brightness(augmented, factor)
+            
+            elif aug_type == 'contrast':
+                factor = np.random.RandomState(42).choice([0.97, 1.03])
+                augmented = self._adjust_contrast(augmented, factor)
+            
+            elif aug_type == 'saturation':
+                augmented = self._adjust_saturation(augmented)
+            
+            elif aug_type == 'rotation':
+                angle = np.random.RandomState(42).choice([-1, 1])
+                h, w = augmented.shape[:2]
+                center = (w // 2, h // 2)
+                rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+                augmented = cv2.warpAffine(augmented, rotation_matrix, (w, h),
+                                         borderMode=cv2.BORDER_REFLECT)
+            
+            elif aug_type == 'blur':
+                augmented = self._apply_blur(augmented, self.augmentation_params['blur_sigma'])
+        
+        result = augmented.astype(np.uint8)
+        
+        # 保存到快取
+        self.cache.set(frame_hash, augmentation_type, result)
+        
+        return result
     
     def create_augmented_versions(self, frames, output_base_path, save_func):
         """
-        為給定的幀序列創建8個增強版本並保存
+        為給定的幀序列創建增強版本並保存
+        
+        增強組合（共 8 個版本）：
+        1. Original
+        2. Original + Brightness
+        3. Original + Contrast
+        4. Original + Saturation
+        5. Mirror
+        6. Mirror + Brightness
+        7. Mirror + Contrast
+        8. Mirror + Saturation
         
         Args:
             frames: 標準化後的幀列表
@@ -111,29 +321,33 @@ class DataAugmentor:
         Returns:
             成功保存的版本數量
         """
-        base_augmentation_types = [None, 'rotation', 'scale', 'brightness']
-        base_suffixes = ['', '_rotation', '_scale', '_brightness']
+        # 定義增強組合
+        augmentation_configs = [
+            # Original 系列
+            (None, ''),
+            ('brightness', '_brightness'),
+            ('contrast', '_contrast'),
+            ('saturation', '_saturation'),
+            # Mirror 系列
+            ('mirror', '_mirror'),
+            ('mirror+brightness', '_mirror_brightness'),
+            ('mirror+contrast', '_mirror_contrast'),
+            ('mirror+saturation', '_mirror_saturation'),
+        ]
         
         success_count = 0
         output_ext = '.mp4'
         
-        for base_aug, base_suffix in zip(base_augmentation_types, base_suffixes):
-            # 創建基本增強版本
-            if base_aug is None:
-                base_frames = frames
+        for aug_type, suffix in augmentation_configs:
+            # 應用增強
+            if aug_type is None:
+                augmented_frames = frames
             else:
-                base_frames = [self.apply_augmentation(frame, base_aug) for frame in frames]
+                augmented_frames = [self.apply_augmentation(frame, aug_type) for frame in frames]
             
-            # 創建不反轉版本
-            output_file = output_base_path + base_suffix + output_ext
-            if save_func(base_frames, output_file):
-                success_count += 1
-            
-            # 創建反轉版本
-            flip_frames = [self.apply_augmentation(frame, 'flip') for frame in base_frames]
-            flip_suffix = base_suffix + '_flip' if base_suffix else '_flip'
-            output_file_flip = output_base_path + flip_suffix + output_ext
-            if save_func(flip_frames, output_file_flip):
+            # 保存
+            output_file = output_base_path + suffix + output_ext
+            if save_func(augmented_frames, output_file):
                 success_count += 1
         
         return success_count
@@ -144,12 +358,13 @@ class DataAugmentor:
 class VideoProcessor:
     """
     核心影片處理器 - 辨識時也會用到
-    
+
     功能：
     1. 智能人體檢測和裁切（MediaPipe Pose）
-    2. 影片標準化（FPS、解析度）
-    3. 影片編碼優化（h.264）
-    
+    2. 背景移除（MediaPipe SelfieSegmentation）
+    3. 影片標準化（FPS、解析度）
+    4. 影片編碼優化（h.264）
+
     注意：
     - 不包含數據增強功能！數據增強請使用 DataAugmentor
     - 不強制幀數標準化！由呼叫者決定目標幀數
@@ -165,40 +380,57 @@ class VideoProcessor:
     # 人體裁切參數
     CROP_PADDING = 0.40     # 邊界框擴展比例（40%）- 大幅增加裁切區域
     MIN_DETECTION_CONFIDENCE = 0.5  # 最低檢測信心度
+
+    # 背景移除參數
+    DEFAULT_BG_COLOR = (0, 255, 0)   # 預設背景顏色 (綠幕 BGR 格式)
+    SEGMENTATION_MODEL = 1            # SelfieSegmentation 模型選擇 (1=較高品質)
     
-    def __init__(self, enable_cropping=True, target_frames=None):
+    # 邊界優化參數
+    MASK_THRESHOLD = 0.5              # 遮罩二值化閾值
+    MORPHOLOGY_KERNEL_SIZE = 5        # 形態學操作核心大小
+    MORPHOLOGY_ITERATIONS = 2         # 形態學操作迭代次數
+    BLUR_KERNEL_SIZE = 5              # 高斯模糊核心大小（平滑邊界）
+
+    def __init__(self, enable_cropping=True, enable_background_removal=False, target_frames=None):
         """
         初始化影片處理器
-        
+
         Args:
             enable_cropping: 是否啟用智能人體裁切（預設開啟）
+            enable_background_removal: 是否啟用背景移除（預設關閉）
             target_frames: 目標幀數（None=不強制標準化，由呼叫者決定）
         """
         # 檢查是否有ffmpeg（用於後處理確保h264編碼）
         self.has_ffmpeg = self._check_ffmpeg()
-        
+
         # 是否啟用智能裁切
         self.enable_cropping = enable_cropping
-        
+
+        # 是否啟用背景移除
+        self.enable_background_removal = enable_background_removal
+
         # 目標幀數（訓練時使用，辨識時由 SlidingWindowInference 決定）
         self.target_frames = target_frames
-        
-        # 第一幀裁切參數（用於固定裁切區域）
+
+        # 第一幀裁切參數（用於固定裁切區域，每個影片獨立）
         self.fixed_crop_params = None
-        
-        # 初始化 MediaPipe Pose（延遲初始化）
-        self.mp_pose = None
-        self.pose_detector = None
-        
+
+        # 使用線程池管理的 MediaPipe Pose（每個線程獨立實例）
         if self.enable_cropping:
-            self.mp_pose = mp.solutions.pose
-            self.pose_detector = self.mp_pose.Pose(
-                static_image_mode=False,
-                model_complexity=1,  # 0=Lite, 1=Full, 2=Heavy
-                min_detection_confidence=self.MIN_DETECTION_CONFIDENCE,
-                min_tracking_confidence=0.5
+            self.pose_detector = MediaPipePosePool.get_detector(
+                min_detection_confidence=self.MIN_DETECTION_CONFIDENCE
             )
-        
+        else:
+            self.pose_detector = None
+
+        # 使用線程池管理的 SelfieSegmentation（每個線程獨立實例）
+        if self.enable_background_removal:
+            self.segmenter = SelfieSegmentationPool.get_segmenter(
+                model_selection=self.SEGMENTATION_MODEL
+            )
+        else:
+            self.segmenter = None
+
     def _check_ffmpeg(self):
         """檢查系統是否有ffmpeg"""
         import subprocess
@@ -213,12 +445,12 @@ class VideoProcessor:
     
     def detect_and_crop_person(self, frame, is_first_frame=False):
         """
-        檢測並裁切畫面中「最前面」的人的頭部和肩膀區域
+        檢測並裁切畫面中「最前面」的人的完整上半身
         
-        使用 MediaPipe Pose 檢測人體關鍵點，主要聚焦：
+        使用 MediaPipe Pose 檢測人體關鍵點，計算包含：
         - 頭部（鼻子、眼睛、耳朵）
-        - 肩膀區域（提供上半身穩定性）
-        - 固定裁切框避免視覺跳動
+        - 上半身（肩膀、手肘、手腕）
+        - 完整手臂（確保不裁切）
         
         Args:
             frame: 輸入幀 [H, W, 3] BGR
@@ -345,12 +577,78 @@ class VideoProcessor:
             return frame, False
         
         return cropped, True
-    
-    def __del__(self):
-        """清理資源"""
-        if self.pose_detector is not None:
-            self.pose_detector.close()
-    
+
+    def apply_background_removal(self, frame, bg_color=None):
+        """
+        應用背景移除到單一幀（優化版：邊界平滑處理）
+
+        優化策略：
+        1. 提高輸入解析度（保持原始解析度處理）
+        2. 形態學操作平滑邊界（膨脹+侵蝕）
+        3. 高斯模糊減少鋸齒
+        4. 綠幕背景便於觀察調整
+
+        Args:
+            frame: 輸入幀 [H, W, 3] BGR
+            bg_color: 背景顏色 (B, G, R)，預設為綠幕
+
+        Returns:
+            處理後的幀 [H, W, 3] BGR（前景保持，背景為綠幕）
+        """
+        if not self.enable_background_removal or self.segmenter is None:
+            return frame
+
+        if bg_color is None:
+            bg_color = self.DEFAULT_BG_COLOR
+
+        try:
+            h, w = frame.shape[:2]
+
+            # 步驟1: 轉換為 RGB（MediaPipe 需要 RGB 格式）
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # 步驟2: 進行分割（使用原始解析度提升精度）
+            results = self.segmenter.process(frame_rgb)
+            mask = results.segmentation_mask
+
+            if mask is not None:
+                # 確保遮罩和幀有相同的尺寸
+                mask = cv2.resize(mask, (w, h))
+
+                # 步驟3: 二值化遮罩（提高對比度）
+                mask_binary = (mask > self.MASK_THRESHOLD).astype(np.uint8)
+
+                # 步驟4: 形態學操作平滑邊界
+                # 4.1 膨脹操作：填補人體內部的小孔洞
+                kernel = np.ones((self.MORPHOLOGY_KERNEL_SIZE, self.MORPHOLOGY_KERNEL_SIZE), np.uint8)
+                mask_dilated = cv2.dilate(mask_binary, kernel, iterations=self.MORPHOLOGY_ITERATIONS)
+
+                # 4.2 侵蝕操作：縮小邊界，移除噪點
+                mask_eroded = cv2.erode(mask_dilated, kernel, iterations=self.MORPHOLOGY_ITERATIONS)
+
+                # 步驟5: 高斯模糊平滑邊界（減少鋸齒）
+                mask_smooth = cv2.GaussianBlur(mask_eroded.astype(np.float32),
+                                              (self.BLUR_KERNEL_SIZE, self.BLUR_KERNEL_SIZE), 0)
+
+                # 步驟6: 創建綠幕背景
+                green_background = np.full((h, w, 3), bg_color, dtype=np.uint8)
+
+                # 步驟7: 根據平滑遮罩合成最終圖像
+                # 使用加權混合獲得平滑過渡
+                mask_3channel = mask_smooth[:, :, np.newaxis]
+                output_frame = (frame * mask_3channel + green_background * (1 - mask_3channel)).astype(np.uint8)
+
+                return output_frame
+            else:
+                # 如果分割失敗，返回原始幀
+                return frame
+
+        except Exception as e:
+            print(f"背景移除處理失敗: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return frame
+
     def normalize_frames(self, frames, target_count):
         """
         智能幀數標準化
@@ -393,32 +691,36 @@ class VideoProcessor:
     
     def process_and_crop_frames(self, frames):
         """
-        處理幀序列：智能裁切 + 解析度標準化
-        
+        處理幀序列：智能裁切 + 背景移除 + 解析度標準化
+
         注意：此函數不包含數據增強！僅用於核心處理
-        
+
         Args:
             frames: 輸入幀列表
-        
+
         Returns:
             處理後的幀列表（標準化到 224x224）
         """
         # 重置固定裁切參數（為每個新影片重置）
         self.fixed_crop_params = None
-        
+
         processed_frames = []
-        
+
         for i, frame in enumerate(frames):
             # 1. 智能裁切人體（如果啟用）
             if self.enable_cropping:
                 frame_cropped, success = self.detect_and_crop_person(frame, is_first_frame=(i == 0))
                 if success:
                     frame = frame_cropped
-            
-            # 2. 解析度標準化
+
+            # 2. 背景移除（如果啟用）
+            if self.enable_background_removal:
+                frame = self.apply_background_removal(frame)
+
+            # 3. 解析度標準化
             frame_resized = cv2.resize(frame, (self.TARGET_WIDTH, self.TARGET_HEIGHT))
             processed_frames.append(frame_resized)
-        
+
         return processed_frames
 
     def _convert_to_h264(self, input_video, output_video):
@@ -565,36 +867,45 @@ class VideoProcessor:
                 # 不進行幀數標準化
                 normalized_frames = original_frames
 
+            # 重置固定裁切參數（為每個新影片重置，避免線程間干擾）
+            self.fixed_crop_params = None
+
             # 步驟2: 智能裁切人體（在 resize 之前）
-            cropped_frames = []
+            processed_frames = []
             crop_success_count = 0
-            
+            bg_removal_count = 0
+
             for i, frame in enumerate(normalized_frames):
+                # 2.1 智能裁切人體（如果啟用）
                 if self.enable_cropping:
                     frame_cropped, success = self.detect_and_crop_person(frame, is_first_frame=(i == 0))
                     if success:
-                        cropped_frames.append(frame_cropped)
+                        frame = frame_cropped
                         crop_success_count += 1
-                    else:
-                        cropped_frames.append(frame)
-                else:
-                    cropped_frames.append(frame)
-            
-            # 如果啟用了裁切，顯示裁切成功率
+
+                # 2.2 背景移除（如果啟用）
+                if self.enable_background_removal:
+                    frame = self.apply_background_removal(frame)
+                    bg_removal_count += 1
+
+                processed_frames.append(frame)
+
+            # 顯示處理統計
             if self.enable_cropping:
                 crop_rate = (crop_success_count / len(normalized_frames)) * 100
                 if crop_rate < 50:
                     print(f"⚠️  警告: {os.path.basename(input_path)} 人體檢測率較低 ({crop_rate:.1f}%)")
 
+
             # 步驟3: 解析度標準化
             resized_frames = []
-            for frame in cropped_frames:
+            for frame in processed_frames:
                 frame_resized = cv2.resize(frame, (self.TARGET_WIDTH, self.TARGET_HEIGHT))
                 resized_frames.append(frame_resized)
 
             # 步驟4: 數據增強（可選）
             if augmentor is not None:
-                # 使用 DataAugmentor 創建8個增強版本
+                # 使用 DataAugmentor 創建8個增強版本（Original + Mirror 各配以光照增強）
                 success_count = augmentor.create_augmented_versions(
                     resized_frames,
                     output_path_base,
@@ -615,6 +926,11 @@ class VideoProcessor:
     def process_directory(self, input_dir, output_dir, max_workers=None, augmentor=None):
         """
         處理整個目錄下的所有影片
+        
+        優化：
+        1. 每個影片使用獨立的 VideoProcessor（避免 fixed_crop_params 共享）
+        2. 全域共享 MediaPipe Pose（提高效率）
+        3. 共享 AugmentationCache（避免重複計算）
         
         Args:
             input_dir: 輸入目錄
@@ -637,8 +953,8 @@ class VideoProcessor:
             # 預留 1 核給系統，75% 用於視頻處理
             max_workers = max(2, int((physical_cores - 1) * 0.75))
         
-        max_workers = max(1, min(max_workers, cpu_count))
-        print(f"🔧 使用 {max_workers} 個工作線程 (系統 {cpu_count} 核心)")
+        # 限制線程數量最多 3 個，避免記憶體過度消耗
+        max_workers = max(1, min(max_workers, 3))
         
         # 獲取所有影片文件
         video_files = []
@@ -663,13 +979,38 @@ class VideoProcessor:
                     
                     video_files.append((src_path, dest_path))
         
+        # 定義工作函數：每個影片一個獨立的 VideoProcessor
+        def process_video_worker(args):
+            src_path, dest_path = args
+            try:
+                # 每個線程創建自己的 VideoProcessor 實例（獲取線程專用的 MediaPipe 實例）
+                processor = VideoProcessor(
+                    enable_cropping=self.enable_cropping,
+                    enable_background_removal=self.enable_background_removal,
+                    target_frames=self.target_frames
+                )
+
+                # 如果提供了 augmentor，每個線程使用自己的快取實例（避免線程間干擾）
+                if augmentor is not None:
+                    thread_cache = AugmentationCache()
+                    augmentor_with_cache = DataAugmentor(cache=thread_cache)
+                    try:
+                        return processor.process_video(src_path, dest_path, augmentor=augmentor_with_cache)
+                    finally:
+                        thread_cache.clear()  # 處理完畢後清理快取
+                else:
+                    return processor.process_video(src_path, dest_path, augmentor=None)
+            finally:
+                # 清理當前線程的 MediaPipe 實例（避免時間戳記衝突）
+                if self.enable_cropping:
+                    MediaPipePosePool.close_thread_detector()
+                if self.enable_background_removal:
+                    SelfieSegmentationPool.close_thread_segmenter()
+        
         # 使用多線程處理影片
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(tqdm(
-                executor.map(
-                    lambda x: self.process_video(x[0], x[1], augmentor), 
-                    video_files
-                ), 
+                executor.map(process_video_worker, video_files),
                 total=len(video_files), 
                 desc="🎬 處理影片"
             ))
@@ -678,63 +1019,123 @@ class VideoProcessor:
         if success_count < len(video_files):
             print(f"⚠️  失敗 {len(video_files) - success_count} 個影片")
 
-def main():
-    """
-    主程式 - 訓練前處理（包含數據增強）
-    
-    如果只需要標準化（辨識時使用），請參考 process_for_inference()
-    """
-    print("=" * 70)
-    print("手語影片前處理：智能裁切 + 標準化 + 數據增強（訓練用）")
-    print("=" * 70)
-    
-    # 檢測是否在 Kaggle 環境中
-    is_kaggle = os.path.exists('/kaggle')
-    
-    if is_kaggle:
-        # Kaggle 環境配置
-        input_dir = "/kaggle/input/augment/augmented_videos"
-        output_dir = "/kaggle/working/videos_normalized"
-    else:
-        # 本地環境配置
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # 使用augmented_videos作為輸入
-        input_dir = os.path.join(os.path.dirname(current_dir), "/Users/baidongqu/Desktop/MVP/videos")
-        output_dir = os.path.join(os.path.dirname(current_dir), "videos_normalized")
-    
-    # 初始化處理器（啟用智能裁切 + 80幀標準化）
-    processor = VideoProcessor(enable_cropping=True, target_frames=80)
-    
-    # 初始化數據增強器（訓練時使用）
-    augmentor = DataAugmentor()
-    
-    # 處理影片（包含數據增強）
-    processor.process_directory(input_dir, output_dir, augmentor=augmentor)
-    
-    # 打包輸出目錄為zip檔案
-    if is_kaggle:
-        zip_path = "/kaggle/working/videos_normalized.zip"
-    else:
-        zip_path = os.path.join(os.path.dirname(current_dir), "videos_normalized.zip")
-    
-    try:
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(output_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    if is_kaggle:
-                        arcname = os.path.relpath(file_path, "/kaggle/working")
+    async def process_directory_async(self, input_dir, output_dir, max_workers=None, augmentor=None):
+        """
+        異步版本的目錄處理 - 使用 asyncio + ThreadPoolExecutor 提升效率
+
+        優勢：
+        1. 非阻塞 I/O 操作
+        2. 更好的資源管理
+        3. 更高的並發效率
+
+        Args:
+            input_dir: 輸入目錄
+            output_dir: 輸出目錄
+            max_workers: 工作線程數（None=自動檢測）
+            augmentor: DataAugmentor 實例（可選，訓練時使用）
+        """
+        if not os.path.exists(input_dir):
+            print(f"❌ 輸入目錄不存在: {input_dir}")
+            return
+
+        # 確保輸出目錄存在
+        os.makedirs(output_dir, exist_ok=True)
+
+        # CPU 硬體優化：自動檢測 CPU 核心數
+        cpu_count = psutil.cpu_count(logical=True)
+        if max_workers is None:
+            # M1 最優配置：使用 P-cores (性能核心) 數量
+            physical_cores = psutil.cpu_count(logical=False)
+            # 異步版本可以使用更多線程，因為資源管理更高效
+            max_workers = max(2, int((physical_cores - 1) * 0.9))
+
+        # 限制線程數量避免記憶體過度消耗
+        max_workers = max(1, min(max_workers, 4))
+
+        # 獲取所有影片文件
+        video_files = []
+        for root, _, files in os.walk(input_dir):
+            for file in files:
+                if file.lower().endswith(('.mp4', '.avi', '.mov', '.wmv')):
+                    rel_dir = os.path.relpath(root, input_dir)
+                    src_path = os.path.join(root, file)
+
+                    # 保持相同的目錄結構
+                    if rel_dir == '.':
+                        dest_dir = output_dir
                     else:
-                        arcname = os.path.relpath(file_path, os.path.dirname(current_dir))
-                    zipf.write(file_path, arcname)
-        
-        print(f"✅ 打包完成: {zip_path}")
-    except Exception as e:
-        print(f"❌ 打包失敗: {str(e)}")
-    
-    print("\n" + "=" * 70)
-    print("前處理完成！")
-    print("=" * 70)
+                        dest_dir = os.path.join(output_dir, rel_dir)
+
+                    os.makedirs(dest_dir, exist_ok=True)
+
+                    # 統一輸出檔名為.mp4
+                    file_base = os.path.splitext(file)[0]
+                    dest_file = file_base + self.OUTPUT_EXT
+                    dest_path = os.path.join(dest_dir, dest_file)
+
+                    video_files.append((src_path, dest_path))
+
+        # 異步處理函數
+        async def process_video_async(src_path, dest_path):
+            """異步處理單一影片（線程安全版本）"""
+            loop = asyncio.get_event_loop()
+            
+            def sync_process():
+                """同步處理函數（在線程池中執行）"""
+                try:
+                    # 每個線程創建自己的 VideoProcessor 實例
+                    processor = VideoProcessor(
+                        enable_cropping=self.enable_cropping,
+                        enable_background_removal=self.enable_background_removal,
+                        target_frames=self.target_frames
+                    )
+
+                    # 如果提供了 augmentor，每個任務使用自己的快取實例
+                    if augmentor is not None:
+                        thread_cache = AugmentationCache()
+                        augmentor_with_cache = DataAugmentor(cache=thread_cache)
+                        try:
+                            return processor.process_video(src_path, dest_path, augmentor_with_cache)
+                        finally:
+                            thread_cache.clear()
+                    else:
+                        return processor.process_video(src_path, dest_path, None)
+                finally:
+                    # 清理當前線程的 MediaPipe 實例
+                    if self.enable_cropping:
+                        MediaPipePosePool.close_thread_detector()
+                    if self.enable_background_removal:
+                        SelfieSegmentationPool.close_thread_segmenter()
+            
+            # 在線程池中執行同步處理
+            result = await loop.run_in_executor(None, sync_process)
+            return result
+
+        # 創建異步任務
+        tasks = []
+        semaphore = asyncio.Semaphore(max_workers)  # 限制並發數量
+
+        async def process_with_semaphore(src_path, dest_path):
+            async with semaphore:
+                return await process_video_async(src_path, dest_path)
+
+        for src_path, dest_path in video_files:
+            task = asyncio.create_task(process_with_semaphore(src_path, dest_path))
+            tasks.append(task)
+
+        # 使用異步進度條顯示處理進度
+
+        # 執行所有任務並顯示進度
+        results = []
+        for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="🎬 異步處理影片"):
+            result = await coro
+            results.append(result)
+
+        success_count = sum(results)
+        if success_count < len(video_files):
+            print(f"⚠️  失敗 {len(video_files) - success_count} 個影片")
+
+        print(f"✅ 異步處理完成！成功 {success_count}/{len(video_files)} 個影片")
 
 
 def process_for_inference(input_video, output_video, enable_cropping=True, target_frames=None):
@@ -779,5 +1180,79 @@ def process_for_inference(input_video, output_video, enable_cropping=True, targe
     return success
 
 
+async def main():
+    """
+    主程式 - 異步訓練前處理（包含背景移除 + 數據增強）
+    
+    功能：
+    1. 智能人體裁切
+    2. 背景移除
+    3. 數據增強（8個版本）
+    4. 異步處理提升效率
+    
+    如果只需要標準化（辨識時使用），請參考 process_for_inference()
+    """
+    print("=" * 70)
+    print("手語影片前處理：異步處理 + 智能裁切 + 背景移除 + 數據增強")
+    print("=" * 70)
+
+    # 檢測是否在 Kaggle 環境中
+    is_kaggle = os.path.exists('/kaggle')
+
+    if is_kaggle:
+        # Kaggle 環境配置
+        input_dir = "/kaggle/input/augment/augmented_videos"
+        output_dir = "/kaggle/working/videos_processed"
+    else:
+        # 本地環境配置
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # 使用 bai_dataset 作為輸入
+        input_dir = os.path.join(os.path.dirname(current_dir), "Final_MVP/up")
+        output_dir = os.path.join(os.path.dirname(current_dir), "Final_MVP/videos_processed")
+
+    # 初始化處理器（啟用智能裁切 + 背景移除）
+    processor = VideoProcessor(
+        enable_cropping=True,
+        enable_background_removal=True,
+        target_frames= None  # 設定目標幀數為None，不進行幀數標準化
+    )
+
+    # 初始化數據增強器（訓練時使用）
+    augmentor = DataAugmentor()
+
+    # 使用異步處理
+    await processor.process_directory_async(input_dir, output_dir, augmentor=augmentor)
+
+    # 打包輸出目錄為zip檔案
+    if is_kaggle:
+        zip_path = "/kaggle/working/videos_processed.zip"
+    else:
+        zip_path = os.path.join(os.path.dirname(current_dir), "videos_processed.zip")
+
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(output_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    if is_kaggle:
+                        arcname = os.path.relpath(file_path, "/kaggle/working")
+                    else:
+                        arcname = os.path.relpath(file_path, os.path.dirname(current_dir))
+                    zipf.write(file_path, arcname)
+
+        print(f"✅ 打包完成: {zip_path}")
+    except Exception as e:
+        print(f"❌ 打包失敗: {str(e)}")
+
+    print("\n" + "=" * 70)
+    print("異步前處理完成！")
+    print("=" * 70)
+
+    # 清理全域資源
+    MediaPipePosePool.close_all()
+    SelfieSegmentationPool.close_all()
+
+
 if __name__ == "__main__":
-    main()
+    # 直接使用異步處理
+    asyncio.run(main())

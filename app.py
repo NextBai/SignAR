@@ -84,12 +84,14 @@ import tempfile
 
 # ==================== 影片預處理模組 ====================
 try:
-    from scripts.processor import VideoProcessor
+    from scripts.processor import VideoProcessor, MediaPipePosePool, SelfieSegmentationPool
     VIDEO_PREPROCESSOR = None  # 延遲初始化
+    POSE_DETECTOR_POOL = None  # MediaPipe Pose 檢測器池
+    SEGMENTER_POOL = None  # SelfieSegmentation 分割器池
     PREPROCESSOR_ENABLED = True
-    print("✅ VideoProcessor 模組載入成功")
+    print("✅ processor.py 模組載入成功（除 AugmentationCache 和 DataAugmentor 外）")
 except ImportError as e:
-    print(f"⚠️ VideoProcessor 模組載入失敗: {e}")
+    print(f"⚠️ processor.py 模組載入失敗: {e}")
     print("⚠️ 將使用原始影片處理流程（無智能裁切）")
     PREPROCESSOR_ENABLED = False
 
@@ -273,43 +275,63 @@ def process_next_in_queue():
 def preprocess_video_async(video_path):
     """
     異步預處理影片（智能裁切 + 標準化）
-    
+
+    使用 MediaPipePosePool 和 SelfieSegmentationPool 進行處理
+
     Args:
         video_path: 原始影片路徑
-    
+
     Returns:
         preprocessed_path: 預處理後的影片路徑（臨時文件）
         success: 是否成功
     """
-    global VIDEO_PREPROCESSOR
-    
+    global VIDEO_PREPROCESSOR, POSE_DETECTOR_POOL, SEGMENTER_POOL
+
     if not PREPROCESSOR_ENABLED:
         # 如果預處理器未啟用，返回原始影片
         return video_path, True
-    
+
     try:
         # 延遲初始化 VideoProcessor（避免啟動時開銷）
         if VIDEO_PREPROCESSOR is None:
             print("🔧 初始化 VideoProcessor（首次使用）...")
+
+            # 直接使用 MediaPipePosePool 初始化檢測器
+            try:
+                pose_detector = MediaPipePosePool.get_detector(min_detection_confidence=0.5)
+                POSE_DETECTOR_POOL = pose_detector
+                print("  ✅ MediaPipe Pose 檢測器已初始化")
+            except Exception as e:
+                print(f"  ⚠️ MediaPipe Pose 初始化失敗: {e}")
+
+            # 直接使用 SelfieSegmentationPool 初始化分割器
+            try:
+                segmenter = SelfieSegmentationPool.get_segmenter(model_selection=1)
+                SEGMENTER_POOL = segmenter
+                print("  ✅ SelfieSegmentation 分割器已初始化")
+            except Exception as e:
+                print(f"  ⚠️ SelfieSegmentation 初始化失敗: {e}")
+
             VIDEO_PREPROCESSOR = VideoProcessor(enable_cropping=True)
             print("✅ VideoProcessor 初始化完成")
-        
+
         # 創建臨時文件存儲預處理後的影片
         temp_file = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
         preprocessed_path = temp_file.name
         temp_file.close()
-        
+
         print(f"📹 開始預處理影片: {Path(video_path).name}")
-        print(f"  - 智能裁切: 啟用（聚焦頭部和肩膀）")
+        print(f"  - 智能裁切: 啟用（使用 MediaPipePosePool）")
+        print(f"  - 背景移除: 啟用（使用 SelfieSegmentationPool）")
         print(f"  - 標準化: 80幀 @ 30fps, 224x224")
-        
+
         # 執行預處理（augmentor=None，僅標準化）
         success = VIDEO_PREPROCESSOR.process_video(
             input_path=video_path,
             output_path=preprocessed_path,
             augmentor=None  # 辨識時不使用數據增強
         )
-        
+
         if success:
             print(f"✅ 預處理完成: {Path(preprocessed_path).name}")
             return preprocessed_path, True
@@ -319,7 +341,7 @@ def preprocess_video_async(video_path):
             if os.path.exists(preprocessed_path):
                 os.remove(preprocessed_path)
             return video_path, False
-            
+
     except Exception as e:
         print(f"❌ 預處理異常: {e}")
         import traceback
@@ -410,20 +432,29 @@ def process_video_task(sender_id, video_path, target_language):
                     print(f"🧹 已清理預處理臨時文件: {Path(preprocessed_path).name}")
             except Exception as e:
                 print(f"⚠️ 清理臨時文件失敗: {e}")
-        
+
+        # ==================== 步驟 5: 清理 MediaPipe 資源 ====================
+        try:
+            # 清理當前線程的 MediaPipe 實例（使用 pool 的清理方法）
+            MediaPipePosePool.close_thread_detector()
+            SelfieSegmentationPool.close_thread_segmenter()
+            print("🧹 已清理 MediaPipe 線程資源")
+        except Exception as e:
+            print(f"⚠️ 清理 MediaPipe 資源失敗: {e}")
+
         # 清理用戶狀態
         with queue_lock:
             if sender_id in user_states:
                 user_states[sender_id]['status'] = 'completed'
                 # 延遲刪除狀態（防止立即重複）
                 threading.Timer(10.0, lambda: user_states.pop(sender_id, None)).start()
-            
+
             if sender_id in user_language_timers:
                 user_language_timers.pop(sender_id, None)
-            
+
             current_processing = None
             print(f"🔓 處理完成，釋放處理鎖")
-        
+
         # 處理下一個任務
         process_next_in_queue()
 
@@ -1058,6 +1089,25 @@ def test_websocket():
 
     return jsonify({'message': 'WebSocket 事件已發送，檢查前端 Console'}), 200
 
+
+def cleanup_resources():
+    """應用關閉時清理所有資源"""
+    print("\n🧹 應用關閉中，清理資源...")
+    try:
+        # 清理所有 MediaPipe 實例（使用 pool 的清理方法）
+        MediaPipePosePool.close_all()
+        SelfieSegmentationPool.close_all()
+        print("✅ 已清理所有 MediaPipe 資源")
+    except Exception as e:
+        print(f"⚠️ 清理 MediaPipe 資源時出錯: {e}")
+
+    print("👋 應用已關閉\n")
+
+
+# 註冊應用關閉處理器
+import atexit
+atexit.register(cleanup_resources)
+
 if __name__ == '__main__':
     print("="*60)
     print("🏭 手語影片識別系統啟動中...")
@@ -1088,5 +1138,11 @@ if __name__ == '__main__':
     model_thread = threading.Thread(target=load_model_async, daemon=True)
     model_thread.start()
 
-    # 使用 SocketIO 來運行應用（eventlet 模式）
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    try:
+        # 使用 SocketIO 來運行應用（eventlet 模式）
+        socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    except KeyboardInterrupt:
+        print("\n⏹️ 收到中斷信號...")
+    finally:
+        # 應用關閉時清理資源
+        cleanup_resources()
