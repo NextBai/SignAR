@@ -917,13 +917,18 @@
             if (data.status === 'start') {
                 processingStartTime = Date.now();
                 resetAllSteps();
-                
+
                 // Step 1: Upload Complete
                 updateStep('step1', 'active', '✅ 已接收');
                 setTimeout(() => {
                     updateStep('step1', 'completed', '✅ 完成 0.3s');
                     updateTimelineProgress(16.6);
                 }, 300);
+
+                // 立即顯示影片（如果有提供 video_url）
+                if (data.video_url && data.video_hash) {
+                    loadVideo(data.video_url, data.video_hash, data.timestamp);
+                }
 
                 showNotification('影片已接收', `來自 Messenger Bot: ${data.video_name}`, 'success');
 

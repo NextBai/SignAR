@@ -57,6 +57,11 @@ DOWNLOADED_VIDEOS_FILE = os.path.join(DATA_DIR, "downloaded_videos.json")
 PROCESSED_COUNT_FILE = os.path.join(DATA_DIR, "processed_count.json")
 VIDEO_STORAGE_PATH = os.path.join(DATA_DIR, "downloaded_videos")
 
+# 清理配置
+MAX_STORED_VIDEOS = int(os.environ.get('MAX_STORED_VIDEOS', '5'))  # 最多保留 5 個影片
+MAX_VIDEO_RECORDS = int(os.environ.get('MAX_VIDEO_RECORDS', '10'))  # 最多記錄 10 筆
+VIDEO_CLEANUP_DELAY = int(os.environ.get('VIDEO_CLEANUP_DELAY', '300'))  # 處理完成後 5 分鐘清理（秒）
+
 # 處理計數器
 processed_count = 0
 
@@ -84,12 +89,13 @@ import tempfile
 
 # ==================== 影片預處理模組 ====================
 try:
-    from scripts.processor import VideoProcessor, MediaPipePosePool, SelfieSegmentationPool
+    from scripts.processor import VideoProcessor
+    from utils import MediaPipePosePool, SelfieSegmentationPool
     VIDEO_PREPROCESSOR = None  # 延遲初始化
     POSE_DETECTOR_POOL = None  # MediaPipe Pose 檢測器池
     SEGMENTER_POOL = None  # SelfieSegmentation 分割器池
     PREPROCESSOR_ENABLED = True
-    print("✅ processor.py 模組載入成功（除 AugmentationCache 和 DataAugmentor 外）")
+    print("✅ scripts.processor 模組載入成功（使用 utils.mediapipe_pool）")
 except ImportError as e:
     print(f"⚠️ processor.py 模組載入失敗: {e}")
     print("⚠️ 將使用原始影片處理流程（無智能裁切）")
@@ -560,6 +566,114 @@ def save_processed_count():
     with open(PROCESSED_COUNT_FILE, 'w') as f:
         json.dump({'count': processed_count}, f)
 
+def cleanup_old_videos():
+    """清理舊影片檔案，保留最新的 N 個"""
+    try:
+        if not os.path.exists(VIDEO_STORAGE_PATH):
+            return
+
+        # 獲取所有影片檔案及其修改時間
+        video_files = []
+        for filename in os.listdir(VIDEO_STORAGE_PATH):
+            if filename.endswith('.mp4'):
+                filepath = os.path.join(VIDEO_STORAGE_PATH, filename)
+                mtime = os.path.getmtime(filepath)
+                video_hash = filename[:-4]  # 移除 .mp4
+                video_files.append((video_hash, filepath, mtime))
+
+        # 按時間排序（最新的在前）
+        video_files.sort(key=lambda x: x[2], reverse=True)
+
+        # 保留最新的 MAX_STORED_VIDEOS 個，刪除其他
+        files_to_delete = video_files[MAX_STORED_VIDEOS:]
+
+        for video_hash, filepath, _ in files_to_delete:
+            try:
+                os.remove(filepath)
+                print(f"🗑️  已刪除舊影片: {video_hash}")
+
+                # 從記錄中移除
+                if video_hash in DOWNLOADED_VIDEOS:
+                    DOWNLOADED_VIDEOS.discard(video_hash)
+            except Exception as e:
+                print(f"⚠️  刪除影片失敗 {video_hash}: {e}")
+
+        if files_to_delete:
+            save_downloaded_videos()
+            print(f"✅ 清理完成，保留 {len(video_files) - len(files_to_delete)} 個影片")
+
+    except Exception as e:
+        print(f"❌ 清理影片失敗: {e}")
+        import traceback
+        traceback.print_exc()
+
+def cleanup_old_records():
+    """清理舊記錄，限制 DOWNLOADED_VIDEOS 大小"""
+    global DOWNLOADED_VIDEOS
+
+    try:
+        if len(DOWNLOADED_VIDEOS) > MAX_VIDEO_RECORDS:
+            # 獲取所有記錄及其對應檔案的時間
+            records_with_time = []
+            for video_hash in DOWNLOADED_VIDEOS:
+                filepath = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
+                if os.path.exists(filepath):
+                    mtime = os.path.getmtime(filepath)
+                    records_with_time.append((video_hash, mtime))
+                else:
+                    # 檔案不存在，標記為最舊
+                    records_with_time.append((video_hash, 0))
+
+            # 按時間排序，保留最新的
+            records_with_time.sort(key=lambda x: x[1], reverse=True)
+            new_records = set([hash for hash, _ in records_with_time[:MAX_VIDEO_RECORDS]])
+
+            removed_count = len(DOWNLOADED_VIDEOS) - len(new_records)
+            DOWNLOADED_VIDEOS = new_records
+            save_downloaded_videos()
+
+            print(f"🗑️  清理舊記錄：移除 {removed_count} 筆，保留 {len(DOWNLOADED_VIDEOS)} 筆")
+
+    except Exception as e:
+        print(f"❌ 清理記錄失敗: {e}")
+
+def schedule_video_cleanup(video_hash, delay=VIDEO_CLEANUP_DELAY):
+    """延遲清理特定影片（給前端播放時間）"""
+    def delayed_cleanup():
+        try:
+            filepath = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
+            if os.path.exists(filepath):
+                # 檢查是否還在保留範圍內
+                video_files = []
+                for filename in os.listdir(VIDEO_STORAGE_PATH):
+                    if filename.endswith('.mp4'):
+                        fp = os.path.join(VIDEO_STORAGE_PATH, filename)
+                        video_files.append((fp, os.path.getmtime(fp)))
+
+                video_files.sort(key=lambda x: x[1], reverse=True)
+
+                # 如果不在保留範圍內，刪除
+                if (filepath, os.path.getmtime(filepath)) not in video_files[:MAX_STORED_VIDEOS]:
+                    os.remove(filepath)
+                    print(f"🗑️  延遲清理：已刪除 {video_hash}")
+
+                    if video_hash in DOWNLOADED_VIDEOS:
+                        DOWNLOADED_VIDEOS.discard(video_hash)
+                        save_downloaded_videos()
+        except Exception as e:
+            print(f"⚠️  延遲清理失敗 {video_hash}: {e}")
+
+    # 延遲執行清理
+    timer = threading.Timer(delay, delayed_cleanup)
+    timer.daemon = True
+    timer.start()
+
+def cleanup_memory():
+    """強制 Python 垃圾回收，釋放記憶體"""
+    import gc
+    gc.collect()
+    print("🧹 記憶體清理完成")
+
 def allowed_file(filename):
     """檢查檔案副檔名是否允許"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -692,12 +806,21 @@ def process_video_and_get_sentence_with_language(video_path, socketio_instance=N
                 send_processing_complete(video_hash, sentence)
             
             return sentence
-            
+
     except Exception as e:
         print(f"❌ 影片處理失敗: {e}")
         import traceback
         traceback.print_exc()
         return "Hello World! (處理失敗)"
+
+    finally:
+        # 無論成功或失敗，都清理記憶體
+        try:
+            import gc
+            gc.collect()
+            print("🧹 處理完成後記憶體清理")
+        except:
+            pass
 
 def process_video_and_get_sentence(video_path, socketio_instance=None):
     """處理影片並返回識別的句子（預設繁體中文）"""
@@ -798,22 +921,43 @@ def send_processing_complete(video_hash, recognized_sentence):
         }, namespace='/')
         print(f"🔔 已發送完成動畫事件: {recognized_sentence}")
 
+        # 處理完成後執行清理
+        try:
+            # 1. 清理舊影片檔案（保留最新 5 個）
+            cleanup_old_videos()
+
+            # 2. 清理舊記錄（限制最多 10 筆）
+            cleanup_old_records()
+
+            # 3. 延遲清理當前影片（5 分鐘後，給前端播放時間）
+            if video_hash:
+                schedule_video_cleanup(video_hash)
+
+            # 4. 強制記憶體清理
+            cleanup_memory()
+
+        except Exception as e:
+            print(f"⚠️  清理過程出錯: {e}")
+
 def trigger_frontend_animation(video_name="messenger_video", video_hash=None, is_duplicate=False, recognized_sentence=None):
     """觸發前端動畫（用於 Messenger Bot 上傳）"""
     def run_animation():
         with app.app_context():
-            # 發送開始處理事件
+            # 發送開始處理事件（包含影片 URL，讓前端立即顯示影片）
             socketio.emit('messenger_upload', {
                 'status': 'start',
                 'video_name': video_name,
+                'video_url': f'/videos/{video_hash}' if video_hash else None,
+                'video_hash': video_hash,
+                'timestamp': time.time(),
                 'recognized_sentence': recognized_sentence or "處理中..."
             }, namespace='/')
 
-            print(f"🔔 已發送開始動畫事件: {video_name}")
+            print(f"🔔 已發送開始動畫事件: {video_name} (video_hash: {video_hash})")
 
             # 不等待固定時間，而是等待處理完成訊號
             # 進度會通過 processing_progress 事件即時更新
-            
+
             # 等待完成事件（這個會由 process_video_and_get_sentence 完成後觸發）
             # 這裡我們不手動發送完成事件，而是讓它自然結束
 
@@ -929,6 +1073,13 @@ def webhook():
                                         save_downloaded_videos()
                                         print(f"✅ 成功下載影片: {file_path}")
                                         print(f"💾 影片已保留供前端播放")
+
+                                        # 下載後立即檢查並清理（確保不超過限制）
+                                        try:
+                                            cleanup_old_videos()
+                                            cleanup_old_records()
+                                        except Exception as e:
+                                            print(f"⚠️  下載後清理失敗: {e}")
                                     else:
                                         print(f"❌ 下載影片失敗")
                                         send_message(sender_id, "❌ 抱歉，影片下載失敗，請稍後再試。")

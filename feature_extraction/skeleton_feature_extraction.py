@@ -451,15 +451,29 @@ class EnhancedSkeletonExtractor:
         except:
             return None
     
-    def extract_features_from_preloaded_frames(self, frames, frame_width, frame_height):
+    def extract_features_from_frames(self, frames, frame_width, frame_height):
         """
-        從預加載的幀列表提取骨架特徵（供異步 I/O 流程使用）
-        
+        從預加載的幀列表提取骨架特徵（統一介面）
+
         Args:
             frames: list of numpy arrays (H, W, 3) - RGB frames
             frame_width: 幀寬度
             frame_height: 幀高度
-        
+
+        Returns:
+            features: (T, 159) numpy array 或 None
+        """
+        return self.extract_features_from_preloaded_frames(frames, frame_width, frame_height)
+
+    def extract_features_from_preloaded_frames(self, frames, frame_width, frame_height):
+        """
+        從預加載的幀列表提取骨架特徵（供異步 I/O 流程使用）
+
+        Args:
+            frames: list of numpy arrays (H, W, 3) - RGB frames
+            frame_width: 幀寬度
+            frame_height: 幀高度
+
         Returns:
             features: (T, 159) numpy array 或 None
         """
