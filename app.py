@@ -1,13 +1,19 @@
 # 🚫 禁用 GPU/Metal/OpenGL - 必須在所有 import 之前設定
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+# ==================== TensorFlow GPU 禁用設定 ====================
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # 禁用 CUDA
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'false'  # 禁止 GPU 記憶體增長
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 抑制所有 TF 警告（0=全部, 3=只顯示錯誤）
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # 禁用 oneDNN 優化（減少警告）
+
+# ==================== MediaPipe GPU 禁用設定 ====================
 os.environ['MEDIAPIPE_GPU_DISABLED'] = '1'
 os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'
 os.environ['MEDIAPIPE_DISABLE_EGL'] = '1'
 os.environ['EGL_PLATFORM'] = 'surfaceless'
 os.environ['GLOG_logtostderr'] = '1'
-# 抑制 MediaPipe GPU 試探的錯誤訊息（2=只顯示 ERROR 以上）
-os.environ['GLOG_minloglevel'] = '2'
+os.environ['GLOG_minloglevel'] = '2'  # 抑制 MediaPipe GPU 試探錯誤
 
 import eventlet
 eventlet.monkey_patch()
@@ -31,7 +37,7 @@ sys.path.append(str(Path(__file__).parent / "scripts"))
 
 # 設置 Keras backend
 os.environ['KERAS_BACKEND'] = 'tensorflow'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# TF_CPP_MIN_LOG_LEVEL 已在上方設定為 '3'，此處不重複設定
 
 # 強制標準輸出和錯誤輸出無緩衝，確保日誌即時顯示
 sys.stdout.reconfigure(line_buffering=True)
@@ -318,8 +324,18 @@ def preprocess_video_async(video_path):
             except Exception as e:
                 print(f"  ⚠️ SelfieSegmentation 初始化失敗: {e}")
 
-            VIDEO_PREPROCESSOR = VideoProcessor(enable_cropping=True)
-            print("✅ VideoProcessor 初始化完成")
+            # ⚡ 辨識模式：不設定 target_frames，保持原始幀數
+            # 原因：
+            # 1. 訓練時固定 80 幀是為了批次訓練（模型要求固定輸入）
+            # 2. 辨識時使用滑動窗口（SlidingWindowInference, stride=80）
+            # 3. 可處理任意長度影片（例如包含多個單詞的長句子）
+            # 4. 如果設定 target_frames=80，會把長影片壓縮，導致識別錯誤
+            VIDEO_PREPROCESSOR = VideoProcessor(
+                enable_cropping=True,
+                enable_background_removal=False,  # 根據需求調整
+                target_frames=None  # ✅ 明確設為 None，不限制幀數
+            )
+            print("✅ VideoProcessor 初始化完成（辨識模式：無幀數限制）")
 
         # 創建臨時文件存儲預處理後的影片
         temp_file = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)

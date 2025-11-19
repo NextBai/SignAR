@@ -205,14 +205,22 @@ class SignLanguageInference:
         try:
             # 啟用 unsafe deserialization（處理 Lambda 層）
             keras.config.enable_unsafe_deserialization()
-            
+
             # 載入模型（Keras 3 會自動處理 backend 差異）
             custom_objects = {
                 'FocalLoss': FocalLoss,
                 'MixupAccuracy': MixupAccuracy,
                 'MixupTop3Accuracy': MixupTop3Accuracy
             }
+
+            # 抑制 Keras 警告（masking 和 optimizer 變數不匹配）
+            import warnings
+            warnings.filterwarnings('ignore', category=UserWarning, module='keras')
+
             model = keras.models.load_model(self.model_path, custom_objects=custom_objects)
+
+            # 恢復警告
+            warnings.filterwarnings('default', category=UserWarning, module='keras')
             
             print(f"✅ 模型載入成功")
             print(f"   輸入形狀: {model.input_shape}")

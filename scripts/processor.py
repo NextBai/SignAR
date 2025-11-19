@@ -259,7 +259,7 @@ class VideoProcessor:
     """
     
     # 標準化參數
-    TARGET_FPS = 30         # 目標幀率
+    TARGET_FPS = 80         # 目標幀率
     TARGET_WIDTH = 224      # 目標寬度
     TARGET_HEIGHT = 224     # 目標高度
     TARGET_BITRATE = 2000   # 目標比特率 (kbps)
@@ -981,27 +981,37 @@ def _process_video_worker_static(args):
 def process_for_inference(input_video, output_video, enable_cropping=True, target_frames=None):
     """
     辨識前處理 - 智能裁切 + 背景移除 + 標準化（不含數據增強）
-    
+
     用於辨識時的影片前處理：
     1. 智能裁切人體（可選）
     2. 背景移除（啟用）
-    3. 幀數標準化（預設80幀）
+    3. 幀數標準化（預設 None = 保持原始幀數，適合處理多單詞影片）
     4. 解析度標準化（224x224）
-    
+
+    ⚠️ 重要：辨識時不應固定幀數！
+    - 訓練時固定 80 幀是為了批次訓練
+    - 辨識時使用滑動窗口（SlidingWindowInference），可處理任意長度
+    - 如果設定 target_frames=80，長影片會被壓縮，識別精度下降
+
     不包含數據增強！僅輸出單個標準化版本
-    
+
     Args:
         input_video: 輸入影片路徑
         output_video: 輸出影片路徑
         enable_cropping: 是否啟用智能裁切（預設開啟）
-        target_frames: 目標幀數（預設80幀）
-    
+        target_frames: 目標幀數（預設 None = 不限制，保持原始幀數）
+                      ⚠️ 除非有特殊需求，否則不建議設定此參數
+
     Returns:
         處理是否成功
-    
+
     使用範例：
         >>> from processor import process_for_inference
+        >>> # 處理單一影片（保持原始幀數）
         >>> success = process_for_inference('input.mp4', 'output.mp4')
+        >>>
+        >>> # 如果真的需要固定幀數（不建議）
+        >>> success = process_for_inference('input.mp4', 'output.mp4', target_frames=80)
     """
     print("=" * 70)
     print("手語影片前處理：智能裁切 + 背景移除 + 標準化（辨識用）")
@@ -1082,7 +1092,7 @@ def main():
     try:
         print("\n📦 打包輸出檔案...")
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(output_dir):
+            for root, _, files in os.walk(output_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
                     if is_kaggle:

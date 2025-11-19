@@ -216,18 +216,26 @@ class SlidingWindowInference:
     def _load_model(self, model_path, label_map_path):
         """載入模型和標籤"""
         print(f"📥 載入模型: {model_path}")
-        
+
         # 啟用 unsafe deserialization（處理 Lambda 層）
         keras.config.enable_unsafe_deserialization()
-        
+
         # 載入模型
         custom_objects = {
             'FocalLoss': FocalLoss,
             'MixupAccuracy': MixupAccuracy,
             'MixupTop3Accuracy': MixupTop3Accuracy
         }
+
+        # 抑制 Keras 警告（masking 和 optimizer 變數不匹配）
+        import warnings
+        warnings.filterwarnings('ignore', category=UserWarning, module='keras')
+
         self.model = keras.models.load_model(model_path, custom_objects=custom_objects)
         keras.mixed_precision.set_global_policy('float32')
+
+        # 恢復警告（只抑制載入時的警告）
+        warnings.filterwarnings('default', category=UserWarning, module='keras')
         
         # 載入標籤
         with open(label_map_path, 'r', encoding='utf-8') as f:
