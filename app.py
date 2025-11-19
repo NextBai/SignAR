@@ -203,19 +203,19 @@ def add_to_queue(sender_id, video_path):
         }
         
         print(f"✅ 用戶 {sender_id} 已加入隊列（總數: {len(processing_queue)}）")
-        
-        # 啟動5秒計時器等待語言選擇
-        timer = threading.Timer(5.0, language_selection_timeout, args=[sender_id])
-        timer.daemon = True
-        timer.start()
-        user_language_timers[sender_id] = timer
-        
-        # 發送語言選擇提示
-        send_message(sender_id, 
+
+        # 先發送語言選擇提示（確保用戶先收到訊息）
+        send_message(sender_id,
             "🎬 已收到您的手語影片！\n\n"
             "💬 請在 5 秒內回覆您想要的語言（例如：英文、日文、韓文）\n"
             "⏱️ 如果沒有回覆，將預設使用繁體中文。"
         )
+
+        # 啟動 5 秒計時器等待語言選擇
+        timer = threading.Timer(5.0, language_selection_timeout, args=[sender_id])
+        timer.daemon = True
+        timer.start()
+        user_language_timers[sender_id] = timer
         
         return True
 
@@ -997,10 +997,15 @@ def get_stats():
 
 @app.route('/videos/<video_hash>')
 def serve_video(video_hash):
-    """提供影片檔案"""
+    """提供影片檔案（支援範圍請求，實現即時串流播放）"""
     file_path = os.path.join(VIDEO_STORAGE_PATH, f"{video_hash}.mp4")
     if os.path.exists(file_path):
-        return send_file(file_path, mimetype='video/mp4')
+        return send_file(
+            file_path,
+            mimetype='video/mp4',
+            conditional=True,  # 啟用範圍請求支援（Range Requests）
+            max_age=3600  # 緩存 1 小時
+        )
     else:
         return jsonify({'error': 'Video not found'}), 404
 
