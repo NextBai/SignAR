@@ -271,11 +271,12 @@ class SlidingWindowInference:
         """確保模型已預熱（延遲預熱）"""
         if not self._model_warmed_up:
             print("🔥 預熱模型（CPU 模式）...")
+            # ⚠️ 維度：RGB (960) + Skeleton (159) = 1119
             dummy_input = np.zeros((1, 300, 1119), dtype=np.float32)
-            
+
             with tf.device('/CPU:0'):
                 _ = self.model.predict(dummy_input, verbose=0)
-            
+
             self._model_warmed_up = True
             print("✅ 模型預熱完成")
     
@@ -395,18 +396,26 @@ class SlidingWindowInference:
             try:
                 rgb_features = self.rgb_extractor.extract_features_from_frames(frames)
             except Exception as e:
-                errors.append(f"RGB: {e}")
-        
+                import traceback
+                errors.append(f"RGB: {e}\n{traceback.format_exc()}")
+
         def extract_skeleton():
             nonlocal skeleton_features, errors
             try:
                 skeleton_features = self.skeleton_extractor.extract_features_from_frames(
-                    frames, 
+                    frames,
                     frame_width=self.TARGET_WIDTH,
                     frame_height=self.TARGET_HEIGHT
                 )
+                if skeleton_features is not None:
+                    print(f"  ✅ Skeleton 提取成功: {skeleton_features.shape}")
+                else:
+                    print(f"  ⚠️ Skeleton 提取返回 None")
             except Exception as e:
-                errors.append(f"Skeleton: {e}")
+                import traceback
+                error_msg = f"Skeleton: {e}\n{traceback.format_exc()}"
+                print(f"  ❌ Skeleton 錯誤:\n{error_msg}")
+                errors.append(error_msg)
         
         import threading
         rgb_thread = threading.Thread(target=extract_rgb)
@@ -419,22 +428,24 @@ class SlidingWindowInference:
         skeleton_thread.join()
         
         if errors:
+            print(f"  ⚠️ 特徵提取錯誤:\n{chr(10).join(errors)}")
             raise RuntimeError("; ".join(errors))
-        
+
         if rgb_features is None or skeleton_features is None:
             raise ValueError("特徵提取失敗")
-        
+
         # 融合特徵
         min_len = min(len(rgb_features), len(skeleton_features))
         rgb_features = rgb_features[:min_len]
         skeleton_features = skeleton_features[:min_len]
-        
+
         concat_features = np.concatenate([rgb_features, skeleton_features], axis=1)
-        
+
         # Padding 到 300
         max_length = 300
+        feature_dim = concat_features.shape[1]  # 動態獲取特徵維度（不寫死 1119）
         if len(concat_features) < max_length:
-            padding = np.zeros((max_length - len(concat_features), 1119), dtype=np.float32)
+            padding = np.zeros((max_length - len(concat_features), feature_dim), dtype=np.float32)
             concat_features = np.concatenate([concat_features, padding], axis=0)
         else:
             concat_features = concat_features[:max_length]
@@ -801,7 +812,7 @@ class SlidingWindowInference:
 def main():
     """主函數"""
     # 硬編碼參數
-    video_path = "1.MOV"  # 輸入影片路徑
+    video_path = "deaf_01.mp4"  # 輸入影片路徑
     model_path = 'model_output/best_model_mps.keras'  # 模型路徑
     label_path = 'model_output/label_map.json'  # 標籤映射路徑
     device = 'mps'  # 特徵提取設備

@@ -96,14 +96,22 @@ def _is_jupyter_environment():
 class EnhancedSkeletonExtractor:
     """增強版骨架提取器 - MediaPipe Holistic（上半身 + 手指細節）"""
     
-    # MediaPipe Pose 上半身關鍵點索引（只保留軀幹和手臂，不含臉部和手腕）
+    # MediaPipe Pose 上半身關鍵點索引（11 個關鍵點 = 33 維）
+    # ⚠️ 重要：模型期待 RGB (960) + Skeleton (159) = 1119 維
+    # 總維度：11×3 + 21×3 + 21×3 = 33 + 63 + 63 = 159 維
+    # 與 Kaggle 訓練代碼完全一致
     UPPER_BODY_INDICES = [
+        0,   # nose
+        2,   # left_eye_inner
+        5,   # right_eye_inner
         11,  # left_shoulder
         12,  # right_shoulder
         13,  # left_elbow
         14,  # right_elbow
-        -1,  # left_eye_center (從 face landmarks 計算)
-        -2   # right_eye_center (從 face landmarks 計算)
+        15,  # left_wrist
+        16,  # right_wrist
+        23,  # left_hip
+        24   # right_hip
     ]
     
     def __init__(self, num_threads=None):
@@ -486,8 +494,9 @@ class EnhancedSkeletonExtractor:
             sample_indices = self._generate_sample_indices(total_frames, sample_rate)
             sample_set = set(sample_indices)
             
-            # 預分配陣列
-            upper_body_keypoints = np.zeros((total_frames, 6, 3), dtype=np.float32)
+            # 預分配陣列（動態獲取上半身關鍵點數量）
+            num_upper_body = len(self.UPPER_BODY_INDICES)
+            upper_body_keypoints = np.zeros((total_frames, num_upper_body, 3), dtype=np.float32)
             left_hand_keypoints = np.zeros((total_frames, 21, 3), dtype=np.float32)
             right_hand_keypoints = np.zeros((total_frames, 21, 3), dtype=np.float32)
             
