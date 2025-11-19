@@ -52,7 +52,7 @@ import keras
 
 # 導入模組
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent / "feature_extraction"))
+sys.path.append(str(Path(__file__).parent.parent / "feature_extraction"))
 
 from rgb_feature_extraction import RGBFeatureExtractor
 from skeleton_feature_extraction import EnhancedSkeletonExtractor
