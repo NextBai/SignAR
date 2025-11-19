@@ -16,8 +16,13 @@ RUN apt-get update && apt-get install -y \
 # 複製依賴文件
 COPY /config/requirements.txt .
 
-# 安裝 Python 依賴
-RUN pip install --no-cache-dir -r requirements.txt
+# 升級 pip 並安裝 Python 依賴（增加超時時間和重試）
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+        --timeout=1000 \
+        --retries=5 \
+        --default-timeout=1000 \
+        -r requirements.txt
 
 # 複製應用程式檔案
 COPY . .
