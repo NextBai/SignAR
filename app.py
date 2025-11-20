@@ -51,7 +51,21 @@ print("=" * 80, flush=True)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'video-processing-secret-key')
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB 上傳限制
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
+
+# Socket.IO 配置（針對 Zeabur 平台優化）
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='eventlet',
+    logger=True,
+    engineio_logger=True,
+    ping_timeout=60,
+    ping_interval=25,
+    # 重要：Zeabur 需要明確允許所有傳輸方式
+    transports=['polling', 'websocket'],
+    # 允許跨域請求
+    allow_upgrades=True
+)
 
 # 用於存儲已下載影片的哈希值，避免重複下載
 DOWNLOADED_VIDEOS = set()

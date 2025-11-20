@@ -868,11 +868,13 @@
 
         // WebSocket Connection
         const socket = io({
-            transports: ['websocket', 'polling'],
+            path: '/socket.io/',
+            transports: ['polling', 'websocket'],  // 先用 polling，再升級到 websocket
             upgrade: true,
             reconnection: true,
-            reconnectionAttempts: 5,
-            reconnectionDelay: 1000
+            reconnectionAttempts: 10,
+            reconnectionDelay: 2000,
+            timeout: 20000
         });
 
         socket.on('connect', () => {
